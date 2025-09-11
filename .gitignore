@@ -1,0 +1,116 @@
+# Compiled executables
+ascii_structure_system
+*.exe
+*.out
+*.app
+
+# Object files
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Core dumps
+core
+core.*
+
+# Temporary files
+*.tmp
+*.temp
+*~
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+placement_debug.log
+solver_debug.log
+api_debug.log
+
+# IDE and editor files
+.vscode/
+.idea/
+*.sublime-*
+.atom/
+.eclipse/
+
+# Claude Code files
+.claude/
+claude.json
+.claude_history
+
+# Build directories
+build/
+dist/
+bin/
+obj/
+
+# Dependencies and package managers
+node_modules/
+.npm/
+.yarn/
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.test
+
+# API keys and secrets
+api_keys.txt
+secrets.txt
+*.key
+*.pem
+
+# Backup files
+*.bak
+*.backup
+*_backup
+*_old
+
+# Archives
+*.zip
+*.tar.gz
+*.tar.bz2
+*.7z
+*.rar
+
+# System files
+*.pid
+*.seed
+*.coverage
+.nyc_output
+
+# Test output
+test_output/
+test_results/
+coverage/
+
+# Documentation build artifacts
+docs/_build/
+site/
+
+# Cache directories
+.cache/
+*.cache
+
+# Profiling data
+*.prof
+gmon.out
+
+# Memory debugging
+valgrind.log
+*.memcheck
+
+# Static analysis output
+*.scan
+cppcheck.xml
