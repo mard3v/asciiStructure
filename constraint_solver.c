@@ -145,37 +145,6 @@ Component *find_component(LayoutSolver *solver, const char *name) {
  * 
  * @param solver The layout solver instance
  */
-void build_constraint_graph(LayoutSolver *solver) {
-  // Initialize graph
-  for (int i = 0; i < MAX_COMPONENTS; i++) {
-    for (int j = 0; j < MAX_COMPONENTS; j++) {
-      solver->constraint_graph[i][j] = 0;
-    }
-  }
-
-  // Build dependency relationships
-  for (int i = 0; i < solver->constraint_count; i++) {
-    DSLConstraint *constraint = &solver->constraints[i];
-    Component *comp_a = find_component(solver, constraint->component_a);
-    Component *comp_b = find_component(solver, constraint->component_b);
-
-    if (comp_a && comp_b) {
-      int idx_a = comp_a - solver->components;
-      int idx_b = comp_b - solver->components;
-
-      // Create dependency based on constraint type
-      switch (constraint->type) {
-      case DSL_ADJACENT:
-        solver->constraint_graph[idx_a][idx_b] = 1;
-        solver->constraint_graph[idx_b][idx_a] = 1; // bidirectional
-        break;
-      default:
-        solver->constraint_graph[idx_a][idx_b] = 1;
-        break;
-      }
-    }
-  }
-}
 
 
 // =============================================================================
@@ -335,8 +304,8 @@ void debug_log_placement_attempt(LayoutSolver *solver, Component *comp,
               has_v_overlap ? "YES" : "NO");
     }
 
-    // Show the grid after successful placement
-    debug_log_ascii_grid(solver, "AFTER SUCCESSFUL PLACEMENT");
+    // Show the grid after successful placement with highlighting
+    debug_log_placement_grid(solver, "AFTER SUCCESSFUL PLACEMENT", comp, x, y);
 
   } else {
     // Log why it failed
@@ -356,7 +325,7 @@ void debug_log_placement_attempt(LayoutSolver *solver, Component *comp,
     comp->placed_y = y;
     comp->is_placed = 1;
 
-    debug_log_ascii_grid(solver, "ATTEMPTED PLACEMENT (FAILED)");
+    debug_log_placement_grid(solver, "ATTEMPTED PLACEMENT (FAILED)", comp, x, y);
 
     // Restore original state
     comp->is_placed = was_placed;
@@ -482,6 +451,134 @@ void debug_log_ascii_grid(LayoutSolver *solver, const char *title) {
   fflush(solver->debug_file);
 }
 
+// Debug function specifically for placement attempts with highlighting
+void debug_log_placement_grid(LayoutSolver *solver, const char *title, Component* highlight_comp, int highlight_x, int highlight_y) {
+  if (!solver->debug_file)
+    return;
+
+  // Find actual bounds including the highlight component at its attempted position
+  int min_x = 0, max_x = 0, min_y = 0, max_y = 0;
+  int first = 1;
+
+  // Include all placed components
+  for (int i = 0; i < solver->component_count; i++) {
+    Component *comp = &solver->components[i];
+    if (comp->is_placed) {
+      if (first) {
+        min_x = comp->placed_x;
+        max_x = comp->placed_x + comp->width - 1;
+        min_y = comp->placed_y;
+        max_y = comp->placed_y + comp->height - 1;
+        first = 0;
+      } else {
+        if (comp->placed_x < min_x) min_x = comp->placed_x;
+        if (comp->placed_x + comp->width - 1 > max_x) max_x = comp->placed_x + comp->width - 1;
+        if (comp->placed_y < min_y) min_y = comp->placed_y;
+        if (comp->placed_y + comp->height - 1 > max_y) max_y = comp->placed_y + comp->height - 1;
+      }
+    }
+  }
+
+  // Include the highlight component bounds
+  if (highlight_comp) {
+    if (first) {
+      min_x = highlight_x;
+      max_x = highlight_x + highlight_comp->width - 1;
+      min_y = highlight_y;
+      max_y = highlight_y + highlight_comp->height - 1;
+      first = 0;
+    } else {
+      if (highlight_x < min_x) min_x = highlight_x;
+      if (highlight_x + highlight_comp->width - 1 > max_x) max_x = highlight_x + highlight_comp->width - 1;
+      if (highlight_y < min_y) min_y = highlight_y;
+      if (highlight_y + highlight_comp->height - 1 > max_y) max_y = highlight_y + highlight_comp->height - 1;
+    }
+  }
+
+  if (first) {
+    fprintf(solver->debug_file, "  %s: (no components to display)\n", title);
+    return;
+  }
+
+  fprintf(solver->debug_file, "  %s:\n", title);
+  fprintf(solver->debug_file, "    Bounds: (%d,%d) to (%d,%d)\n", min_x, min_y, max_x, max_y);
+
+  // Limit output size for debug file
+  int max_width = 60;
+  int max_height = 30;
+  int display_width = (max_x - min_x + 1 > max_width) ? max_width : max_x - min_x + 1;
+  int display_height = (max_y - min_y + 1 > max_height) ? max_height : max_y - min_y + 1;
+
+  fprintf(solver->debug_file, "    ASCII Grid (%dx%d):\n", display_width, display_height);
+
+  // Add column numbers for reference
+  fprintf(solver->debug_file, "      ");
+  for (int x = 0; x < display_width; x++) {
+    if (x % 5 == 0) {
+      fprintf(solver->debug_file, "%d", (x / 10) % 10);
+    } else {
+      fprintf(solver->debug_file, " ");
+    }
+  }
+  fprintf(solver->debug_file, "\n      ");
+  for (int x = 0; x < display_width; x++) {
+    if (x % 5 == 0) {
+      fprintf(solver->debug_file, "%d", x % 10);
+    } else {
+      fprintf(solver->debug_file, " ");
+    }
+  }
+  fprintf(solver->debug_file, "\n");
+
+  // Display grid with highlighting
+  for (int y = min_y; y < min_y + display_height; y++) {
+    fprintf(solver->debug_file, "   %2d ", y);
+    for (int x = min_x; x < min_x + display_width; x++) {
+      char ch = ' '; // Default background character
+      int is_highlight = 0;
+
+      // Check if this position is part of the highlighted component (draw it on top)
+      if (highlight_comp && x >= highlight_x && x < highlight_x + highlight_comp->width &&
+          y >= highlight_y && y < highlight_y + highlight_comp->height) {
+        int local_x = x - highlight_x;
+        int local_y = y - highlight_y;
+        if (highlight_comp->ascii_tile[local_y][local_x] != ' ') {
+          ch = highlight_comp->ascii_tile[local_y][local_x];
+          is_highlight = 1;
+        }
+      }
+
+      // If not highlighted, check other placed components
+      if (!is_highlight) {
+        for (int i = 0; i < solver->component_count; i++) {
+          Component *comp = &solver->components[i];
+          if (comp->is_placed && x >= comp->placed_x && x < comp->placed_x + comp->width &&
+              y >= comp->placed_y && y < comp->placed_y + comp->height) {
+            int local_x = x - comp->placed_x;
+            int local_y = y - comp->placed_y;
+            if (comp->ascii_tile[local_y][local_x] != ' ') {
+              ch = comp->ascii_tile[local_y][local_x];
+              break;
+            }
+          }
+        }
+      }
+
+      // Current room is drawn on top - just output the character
+      fprintf(solver->debug_file, "%c", ch);
+    }
+    fprintf(solver->debug_file, "\n");
+  }
+
+  if (max_x - min_x + 1 > max_width || max_y - min_y + 1 > max_height) {
+    fprintf(solver->debug_file, "    (grid truncated - actual size: %dx%d)\n",
+            max_x - min_x + 1, max_y - min_y + 1);
+  }
+
+  fprintf(solver->debug_file, "\n");
+  fflush(solver->debug_file);
+}
+
 /**
  * @brief Logs comprehensive grid state information
  * 
@@ -531,74 +628,6 @@ void debug_log_grid_state(LayoutSolver *solver, const char *stage) {
  * @param solver The layout solver instance
  * @param comp   Component to analyze constraints for
  */
-void debug_log_constraint_analysis(LayoutSolver *solver, Component *comp) {
-  if (!solver->debug_file)
-    return;
-
-  fprintf(solver->debug_file, "CONSTRAINT ANALYSIS: %s\n", comp->name);
-  fprintf(solver->debug_file, "  Constraint degree: %d\n",
-          count_constraint_degree(solver, comp));
-
-  fprintf(solver->debug_file, "  Related constraints:\n");
-  for (int i = 0; i < solver->constraint_count; i++) {
-    DSLConstraint *constraint = &solver->constraints[i];
-    if (strcmp(constraint->component_a, comp->name) == 0 ||
-        strcmp(constraint->component_b, comp->name) == 0) {
-
-      const char *dir_name;
-      switch (constraint->direction) {
-      case 'n':
-        dir_name = "NORTH";
-        break;
-      case 's':
-        dir_name = "SOUTH";
-        break;
-      case 'e':
-        dir_name = "EAST";
-        break;
-      case 'w':
-        dir_name = "WEST";
-        break;
-      case 'a':
-        dir_name = "ANY";
-        break;
-      default:
-        dir_name = "UNKNOWN";
-        break;
-      }
-
-      Component *other_comp = NULL;
-      int is_comp_a = (strcmp(constraint->component_a, comp->name) == 0);
-
-      if (is_comp_a) {
-        other_comp = find_component(solver, constraint->component_b);
-        fprintf(solver->debug_file,
-                "    ADJACENT(%s, %s, %s) - %s is component A\n",
-                constraint->component_a, constraint->component_b, dir_name,
-                comp->name);
-      } else {
-        other_comp = find_component(solver, constraint->component_a);
-        fprintf(solver->debug_file,
-                "    ADJACENT(%s, %s, %s) - %s is component B\n",
-                constraint->component_a, constraint->component_b, dir_name,
-                comp->name);
-      }
-
-      if (other_comp) {
-        fprintf(solver->debug_file, "      Other component: %s (placed: %s)\n",
-                other_comp->name, other_comp->is_placed ? "YES" : "NO");
-        if (other_comp->is_placed) {
-          fprintf(solver->debug_file,
-                  "      Other component position: (%d,%d)\n",
-                  other_comp->placed_x, other_comp->placed_y);
-        }
-      }
-    }
-  }
-
-  fprintf(solver->debug_file, "\n");
-  fflush(solver->debug_file);
-}
 
 /**
  * @brief Initializes the layout solver with dynamic grid capabilities
@@ -620,6 +649,10 @@ void init_solver(LayoutSolver *solver, int width, int height) {
   solver->grid_min_y = 0;
   solver->next_group_id = 1;
   solver->debug_file = NULL;
+  solver->solver_type = SOLVER_RECURSIVE_TREE; // Default to recursive tree solver
+
+  // Initialize backtracking stack
+  clear_backtrack_stack(solver);
 
   // Initialize grid with empty spaces
   for (int i = 0; i < MAX_GRID_SIZE; i++) {
@@ -634,10 +667,20 @@ void init_solver(LayoutSolver *solver, int width, int height) {
   for (int i = 0; i < MAX_COMPONENTS; i++) {
     solver->placement_attempts[i] = 0;
     solver->components[i].group_id = 0; // No group initially
-    for (int j = 0; j < MAX_COMPONENTS; j++) {
-      solver->constraint_graph[i][j] = 0;
+    solver->failed_counts[i] = 0; // Initialize failed position tracking
+    for (int j = 0; j < 200; j++) {
+      solver->failed_positions[i][j].valid = 0; // Mark all failed positions as invalid initially
     }
   }
+}
+
+/**
+ * @brief Sets the constraint solver strategy type
+ */
+void set_solver_type(LayoutSolver* solver, ConstraintSolverType type) {
+    if (type < SOLVER_COUNT) {
+        solver->solver_type = type;
+    }
 }
 
 /**
@@ -871,11 +914,12 @@ int count_constraint_degree(LayoutSolver *solver, Component *comp) {
 
 /**
  * @brief Finds the unplaced component with the highest constraint degree
- * 
+ *
  * Implements the most-constrained-first heuristic for constraint satisfaction.
  * Components with more constraints are placed first to reduce backtracking
- * and improve overall solver performance.
- * 
+ * and improve overall solver performance. Components with previous placement
+ * failures are deprioritized to allow alternative orderings.
+ *
  * @param solver The layout solver instance
  * @return       Most constrained unplaced component, or NULL if none found
  */
@@ -883,9 +927,10 @@ Component *find_most_constrained_unplaced(LayoutSolver *solver) {
   Component *most_constrained = NULL;
   int max_degree = -1;
 
+  // First pass: try components with no previous placement attempts
   for (int i = 0; i < solver->component_count; i++) {
     Component *comp = &solver->components[i];
-    if (!comp->is_placed) {
+    if (!comp->is_placed && solver->placement_attempts[i] == 0) {
       int degree = count_constraint_degree(solver, comp);
       if (degree > max_degree) {
         max_degree = degree;
@@ -894,163 +939,786 @@ Component *find_most_constrained_unplaced(LayoutSolver *solver) {
     }
   }
 
+  // If no components with zero attempts, try any unplaced component
+  if (!most_constrained) {
+    max_degree = -1;
+    for (int i = 0; i < solver->component_count; i++) {
+      Component *comp = &solver->components[i];
+      if (!comp->is_placed) {
+        int degree = count_constraint_degree(solver, comp);
+        if (degree > max_degree) {
+          max_degree = degree;
+          most_constrained = comp;
+        }
+      }
+    }
+  }
+
   return most_constrained;
 }
 
 /**
- * @brief Attempts component placement using sliding algorithm
- * 
- * Core placement algorithm that tries to satisfy adjacency constraints by
- * sliding the new component along the perpendicular axis to the constraint
- * direction. For north/south constraints, slides east-west; for east/west
- * constraints, slides north-south.
- * 
+ * @brief Attempts component placement using wall-aligned sliding algorithm
+ *
+ * Improved placement algorithm that prioritizes wall alignment and centered placement:
+ * 1. First tries wall alignment (left/right walls for N/S, top/bottom walls for E/W)
+ * 2. If wall alignment fails, slides from center outward in both directions
+ * 3. This reduces diagonal connections by preferring aligned walls and centered placement
+ *
  * @param solver      The layout solver instance
  * @param new_comp    Component to be placed
  * @param placed_comp Already placed reference component
  * @param dir         Direction of adjacency constraint ('n', 's', 'e', 'w')
  * @return            1 if placement successful, 0 if failed
  */
-int try_place_with_sliding(LayoutSolver *solver, Component *new_comp,
-                           Component *placed_comp, Direction dir) {
-  int base_x, base_y;
-  int slide_min, slide_max;
-  int dx, dy;
-
-  switch (dir) {
-  case 'n': // new_comp north of placed_comp
-    base_x = placed_comp->placed_x;
-    base_y = placed_comp->placed_y - new_comp->height;
-    // Try sliding east-west
-    slide_min = -placed_comp->width;
-    slide_max = placed_comp->width;
-    dx = 1;
-    dy = 0;
-    break;
-
-  case 's': // new_comp south of placed_comp
-    base_x = placed_comp->placed_x;
-    base_y = placed_comp->placed_y + placed_comp->height;
-    // Try sliding east-west
-    slide_min = -placed_comp->width;
-    slide_max = placed_comp->width;
-    dx = 1;
-    dy = 0;
-    break;
-
-  case 'e': // new_comp east of placed_comp
-    base_x = placed_comp->placed_x + placed_comp->width;
-    base_y = placed_comp->placed_y;
-    // Try sliding north-south
-    slide_min = -placed_comp->height;
-    slide_max = placed_comp->height;
-    dx = 0;
-    dy = 1;
-    break;
-
-  case 'w': // new_comp west of placed_comp
-    base_x = placed_comp->placed_x - new_comp->width;
-    base_y = placed_comp->placed_y;
-    // Try sliding north-south
-    slide_min = -placed_comp->height;
-    slide_max = placed_comp->height;
-    dx = 0;
-    dy = 1;
-    break;
-
-  default:
-    debug_log_placement_attempt(solver, new_comp, placed_comp, dir, 0, 0, 0);
-    return 0;
+int solve_constraints(LayoutSolver *solver) {
+  // Dispatch to the appropriate solver based on configuration
+  switch (solver->solver_type) {
+    case SOLVER_RECURSIVE_TREE:
+      printf("🌳 Using recursive search tree with backtracking\n");
+      return solve_recursive_tree(solver);
+    default:
+      printf("❌ Unknown solver type: %d\n", solver->solver_type);
+      return 0;
   }
+}
 
-  // Try different sliding positions
-  for (int slide = slide_min; slide <= slide_max; slide++) {
-    int try_x = base_x + slide * dx;
-    int try_y = base_y + slide * dy;
+// BACKTRACKING IMPLEMENTATION
+// =============================================================================
 
-    // Expand grid for this position
-    expand_grid_for_component(solver, new_comp, try_x, try_y);
-
-    // Check if placement is valid (no overlap with non-space characters)
-    if (!has_overlap(solver, new_comp, try_x, try_y)) {
-      // Check adjacency constraint
-      if ((dir == 'n' || dir == 's') &&
-          has_horizontal_overlap(try_x, new_comp->width, placed_comp->placed_x,
-                                 placed_comp->width)) {
-        // Valid north/south placement with horizontal overlap
-        new_comp->placed_x = try_x;
-        new_comp->placed_y = try_y;
-        new_comp->is_placed = 1;
-
-        // Place on grid
-        for (int row = 0; row < new_comp->height; row++) {
-          for (int col = 0; col < new_comp->width; col++) {
-            if (new_comp->ascii_tile[row][col] != ' ') {
-              int grid_x = try_x + col - solver->grid_min_x;
-              int grid_y = try_y + row - solver->grid_min_y;
-              if (grid_x >= 0 && grid_x < solver->grid_width && grid_y >= 0 &&
-                  grid_y < solver->grid_height) {
-                solver->grid[grid_y][grid_x] = new_comp->ascii_tile[row][col];
-              }
-            }
-          }
+/**
+ * @brief Saves the current solver state to the backtracking stack
+ *
+ * Creates a snapshot of the current solver state including component placements,
+ * grid state, and search parameters. This allows restoration if backtracking
+ * is needed due to placement conflicts.
+ *
+ * @param solver            The layout solver instance
+ * @param component_index   Current component being placed
+ * @param constraint_index  Current constraint being satisfied
+ * @param placement_option  Current placement attempt number
+ */
+void save_solver_state(LayoutSolver* solver, int component_index, int constraint_index, int placement_option) {
+    if (solver->backtrack_depth >= MAX_BACKTRACK_DEPTH - 1) {
+        if (solver->debug_file) {
+            fprintf(solver->debug_file, "⚠️  BACKTRACK STACK OVERFLOW - depth %d\n", solver->backtrack_depth);
         }
-
-        // Log successful placement
-        debug_log_placement_attempt(solver, new_comp, placed_comp, dir, try_x,
-                                    try_y, 1);
-        return 1; // Success
-      } else if ((dir == 'e' || dir == 'w') &&
-                 has_vertical_overlap(try_y, new_comp->height,
-                                      placed_comp->placed_y,
-                                      placed_comp->height)) {
-        // Valid east/west placement with vertical overlap
-        new_comp->placed_x = try_x;
-        new_comp->placed_y = try_y;
-        new_comp->is_placed = 1;
-
-        // Place on grid
-        for (int row = 0; row < new_comp->height; row++) {
-          for (int col = 0; col < new_comp->width; col++) {
-            if (new_comp->ascii_tile[row][col] != ' ') {
-              int grid_x = try_x + col - solver->grid_min_x;
-              int grid_y = try_y + row - solver->grid_min_y;
-              if (grid_x >= 0 && grid_x < solver->grid_width && grid_y >= 0 &&
-                  grid_y < solver->grid_height) {
-                solver->grid[grid_y][grid_x] = new_comp->ascii_tile[row][col];
-              }
-            }
-          }
-        }
-
-        // Log successful placement
-        debug_log_placement_attempt(solver, new_comp, placed_comp, dir, try_x,
-                                    try_y, 1);
-        return 1; // Success
-      } else {
-        // Log failed placement attempt (adjacency not satisfied)
-        debug_log_placement_attempt(solver, new_comp, placed_comp, dir, try_x,
-                                    try_y, 0);
-      }
-    } else {
-      // Log failed placement attempt (overlap detected)
-      debug_log_placement_attempt(solver, new_comp, placed_comp, dir, try_x,
-                                  try_y, 0);
+        return; // Stack overflow protection
     }
-  }
 
-  return 0; // Could not place
+    BacktrackState* state = &solver->backtrack_stack[solver->backtrack_depth];
+
+    // Save component states
+    memcpy(state->components, solver->components, sizeof(solver->components));
+
+    // Save grid state
+    memcpy(state->grid, solver->grid, sizeof(solver->grid));
+    state->grid_width = solver->grid_width;
+    state->grid_height = solver->grid_height;
+    state->grid_min_x = solver->grid_min_x;
+    state->grid_min_y = solver->grid_min_y;
+
+    // Save search parameters
+    state->next_group_id = solver->next_group_id;
+    state->component_index = component_index;
+    state->constraint_index = constraint_index;
+    state->placement_option = placement_option;
+
+    solver->backtrack_depth++;
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "💾 SAVED STATE: depth=%d, component=%d, constraint=%d, option=%d\n",
+                solver->backtrack_depth - 1, component_index, constraint_index, placement_option);
+    }
 }
 
 /**
- * @brief Normalizes grid coordinates to ensure all components are in positive space
- * 
- * Translates the entire layout so that the minimum x,y coordinates become (0,0).
- * This final step ensures the output uses standard positive coordinate system
- * regardless of negative coordinates used during dynamic placement.
- * 
+ * @brief Restores the solver state from the backtracking stack
+ *
+ * Pops the most recent state from the backtracking stack and restores
+ * the solver to that state. Returns 1 if restoration successful, 0 if
+ * the stack is empty.
+ *
+ * @param solver The layout solver instance
+ * @return       1 if state restored, 0 if stack empty
+ */
+int restore_solver_state(LayoutSolver* solver) {
+    if (solver->backtrack_depth <= 0) {
+        if (solver->debug_file) {
+            fprintf(solver->debug_file, "❌ BACKTRACK STACK EMPTY - cannot restore\n");
+        }
+        return 0; // Nothing to restore
+    }
+
+    solver->backtrack_depth--;
+    BacktrackState* state = &solver->backtrack_stack[solver->backtrack_depth];
+
+    // Restore component states
+    memcpy(solver->components, state->components, sizeof(solver->components));
+
+    // Restore grid state
+    memcpy(solver->grid, state->grid, sizeof(solver->grid));
+    solver->grid_width = state->grid_width;
+    solver->grid_height = state->grid_height;
+    solver->grid_min_x = state->grid_min_x;
+    solver->grid_min_y = state->grid_min_y;
+
+    // Restore search parameters
+    solver->next_group_id = state->next_group_id;
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "🔄 RESTORED STATE: depth=%d, component=%d, constraint=%d, option=%d\n",
+                solver->backtrack_depth, state->component_index, state->constraint_index, state->placement_option);
+    }
+
+    return 1;
+}
+
+/**
+ * @brief Clears the backtracking stack
+ *
+ * Resets the backtracking stack to empty state. Used during solver
+ * initialization and cleanup.
+ *
  * @param solver The layout solver instance
  */
+void clear_backtrack_stack(LayoutSolver* solver) {
+    solver->backtrack_depth = 0;
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "🗑️  CLEARED BACKTRACK STACK\n");
+    }
+}
+
+/**
+ * @brief Attempts alternative placements for a component using backtracking
+ *
+ * When a component cannot be placed, this function tries to find alternative
+ * placements by backtracking to previous decisions and trying different options.
+ *
+ * @param solver The layout solver instance
+ * @param comp   Component that failed to place
+ * @return       1 if alternative placement found, 0 if no more options
+ */
+int try_alternative_placement(LayoutSolver* solver, Component* comp) {
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "🔍 TRYING ALTERNATIVES for %s (backtrack depth: %d)\n",
+                comp->name, solver->backtrack_depth);
+    }
+
+    // Try to backtrack and find alternative placements
+    while (solver->backtrack_depth > 0) {
+        BacktrackState* state = &solver->backtrack_stack[solver->backtrack_depth - 1];
+
+        if (solver->debug_file) {
+            fprintf(solver->debug_file, "⏪ BACKTRACKING: trying alternative for component %d\n",
+                    state->component_index);
+        }
+
+        // Restore previous state
+        if (!restore_solver_state(solver)) {
+            break;
+        }
+
+        // TODO: Here we would try alternative constraint/placement combinations
+        // For now, we'll just continue backtracking until we find a solution
+        // or exhaust all possibilities
+
+        // If we've backtracked to a different component, we can try continuing from there
+        if (state->component_index != comp - solver->components) {
+            if (solver->debug_file) {
+                fprintf(solver->debug_file, "✅ BACKTRACKED to different component - continuing search\n");
+            }
+            return 1; // Continue search from this point
+        }
+    }
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "❌ NO MORE ALTERNATIVES - backtrack exhausted\n");
+    }
+
+    return 0; // No more alternatives
+}
+
+// =============================================================================
+// RECURSIVE SEARCH TREE BACKTRACKING
+// =============================================================================
+
+/**
+ * @brief Main entry point for recursive backtracking search
+ *
+ * Replaces the linear placement approach with a proper search tree that can
+ * backtrack to any previous decision point and explore alternative branches.
+ *
+ * @param solver The layout solver instance
+ * @return       1 if solution found, 0 if no solution exists
+ */
+int solve_recursive_tree(LayoutSolver* solver) {
+    if (solver->component_count == 0) {
+        return 1; // Nothing to solve
+    }
+
+    // Initialize debug file
+    init_debug_file(solver);
+    printf("🌳 Starting recursive backtracking search...\n");
+
+    // Place first component at origin (this is our root node)
+    Component* first_comp = find_most_constrained_unplaced(solver);
+    if (!first_comp) {
+        close_debug_file(solver);
+        return 0;
+    }
+
+    printf("📍 Placing root component '%s' at origin (0,0)\n", first_comp->name);
+
+    // Initialize grid to fit first component
+    solver->grid_width = first_comp->width;
+    solver->grid_height = first_comp->height;
+    solver->grid_min_x = 0;
+    solver->grid_min_y = 0;
+
+    // Place first component
+    first_comp->placed_x = 0;
+    first_comp->placed_y = 0;
+    first_comp->is_placed = 1;
+    first_comp->group_id = solver->next_group_id++;
+
+    // Place on grid
+    for (int row = 0; row < first_comp->height; row++) {
+        for (int col = 0; col < first_comp->width; col++) {
+            if (first_comp->ascii_tile[row][col] != ' ') {
+                solver->grid[row][col] = first_comp->ascii_tile[row][col];
+            }
+        }
+    }
+
+    if (solver->debug_file) {
+        debug_log_grid_state(solver, "TREE SEARCH ROOT PLACEMENT");
+    }
+
+    // Start recursive search from depth 1
+    int result = place_component_recursive(solver, 1);
+
+    if (result) {
+        printf("🎉 Recursive search found solution!\n");
+        // Normalize coordinates
+        normalize_grid_coordinates(solver);
+        debug_log_grid_state(solver, "TREE SEARCH FINAL SOLUTION");
+    } else {
+        printf("❌ Recursive search exhausted - no solution found\n");
+    }
+
+    close_debug_file(solver);
+    return result;
+}
+
+/**
+ * @brief Recursive function to place components using backtracking
+ *
+ * This is the core of the search tree. Each call represents a node in the tree,
+ * and each placement option represents a branch to explore.
+ *
+ * @param solver The layout solver instance
+ * @param depth  Current search depth (0 = root)
+ * @return       1 if solution found from this node, 0 if dead end
+ */
+int place_component_recursive(LayoutSolver* solver, int depth) {
+    // Check for solution: all components placed
+    Component* next_comp = find_most_constrained_unplaced(solver);
+    if (!next_comp) {
+        return 1; // Success - all components placed!
+    }
+
+    // Iteration limit safety check
+    solver->total_iterations++;
+    if (solver->total_iterations > MAX_SOLVER_ITERATIONS) {
+        if (solver->debug_file) {
+            fprintf(solver->debug_file, "🛑 TREE SEARCH ITERATION LIMIT REACHED at depth %d\n", depth);
+        }
+        return 0;
+    }
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "🌿 TREE NODE depth=%d: trying to place '%s'\n",
+                depth, next_comp->name);
+    }
+
+    // Try all placement options for this component
+    return try_placement_options(solver, next_comp, depth);
+}
+
+/**
+ * @brief Tries all placement options for a component (all branches from this node)
+ *
+ * Each placement option represents a branch in the search tree. We try each
+ * branch, and if it leads to a dead end, we backtrack and try the next branch.
+ *
+ * @param solver The layout solver instance
+ * @param comp   Component to place at this node
+ * @param depth  Current search depth
+ * @return       1 if any branch leads to solution, 0 if all branches fail
+ */
+int try_placement_options(LayoutSolver* solver, Component* comp, int depth) {
+    // Get all possible placement options for this component
+    PlacementOption options[MAX_CONSTRAINTS * 10]; // Allow multiple positions per constraint
+    int option_count = 0;
+
+    get_placement_options(solver, comp, options, &option_count);
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "🔀 Found %d placement options for '%s'\n",
+                option_count, comp->name);
+    }
+
+    // Try each placement option (branch)
+    for (int i = 0; i < option_count; i++) {
+        if (solver->debug_file) {
+            fprintf(solver->debug_file, "🌱 BRANCH %d/%d: trying placement at (%d,%d)\n",
+                    i + 1, option_count, options[i].x, options[i].y);
+        }
+
+        // Save current state before trying this branch
+        save_solver_state(solver, comp - solver->components, i, i);
+
+        // Log detailed placement attempt
+        debug_log_placement_attempt(solver, comp, options[i].other_comp, options[i].dir,
+                                   options[i].x, options[i].y, 0);
+
+        // Try this placement
+        expand_grid_for_component(solver, comp, options[i].x, options[i].y);
+
+        if (!has_overlap(solver, comp, options[i].x, options[i].y)) {
+            // Check constraint satisfaction
+            int satisfies = 0;
+            if ((options[i].dir == 'n' || options[i].dir == 's') &&
+                has_horizontal_overlap(options[i].x, comp->width,
+                                     options[i].other_comp->placed_x,
+                                     options[i].other_comp->width)) {
+                satisfies = 1;
+            } else if ((options[i].dir == 'e' || options[i].dir == 'w') &&
+                       has_vertical_overlap(options[i].y, comp->height,
+                                          options[i].other_comp->placed_y,
+                                          options[i].other_comp->height)) {
+                satisfies = 1;
+            }
+
+            if (satisfies) {
+                // Valid placement - place component and update grid
+                comp->placed_x = options[i].x;
+                comp->placed_y = options[i].y;
+                comp->is_placed = 1;
+                comp->group_id = options[i].other_comp->group_id;
+
+                // Log successful placement
+                debug_log_placement_attempt(solver, comp, options[i].other_comp, options[i].dir,
+                                           options[i].x, options[i].y, 1);
+
+                // Update grid
+                for (int row = 0; row < comp->height; row++) {
+                    for (int col = 0; col < comp->width; col++) {
+                        if (comp->ascii_tile[row][col] != ' ') {
+                            int grid_x = options[i].x + col - solver->grid_min_x;
+                            int grid_y = options[i].y + row - solver->grid_min_y;
+                            if (grid_x >= 0 && grid_x < solver->grid_width &&
+                                grid_y >= 0 && grid_y < solver->grid_height) {
+                                solver->grid[grid_y][grid_x] = comp->ascii_tile[row][col];
+                            }
+                        }
+                    }
+                }
+
+                if (solver->debug_file) {
+                    fprintf(solver->debug_file, "✅ PLACED '%s' at (%d,%d) - exploring subtree\n",
+                            comp->name, options[i].x, options[i].y);
+                }
+
+                // Log grid state after placement
+                debug_log_ascii_grid(solver, "After placement");
+
+                // Recursively try to place remaining components
+                if (place_component_recursive(solver, depth + 1)) {
+                    return 1; // Solution found in this subtree!
+                }
+
+                // This branch didn't lead to solution - backtrack
+                if (solver->debug_file) {
+                    fprintf(solver->debug_file, "🔙 BACKTRACK: branch failed, trying next option\n");
+                }
+            } else {
+                // Constraint not satisfied
+                if (solver->debug_file) {
+                    fprintf(solver->debug_file, "❌ FAILED: constraint not satisfied (%c direction)\n",
+                            options[i].dir);
+                }
+            }
+        } else {
+            // Overlap detected
+            if (solver->debug_file) {
+                fprintf(solver->debug_file, "❌ FAILED: overlap detected at (%d,%d)\n",
+                        options[i].x, options[i].y);
+            }
+        }
+
+        // Record this failed position for future pruning
+        int comp_index = comp - solver->components;
+        record_failed_position(solver, comp_index, options[i].x, options[i].y);
+
+        // Restore state and try next option
+        restore_solver_state(solver);
+    }
+
+    // All branches from this node failed
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "💀 DEAD END: all %d branches failed for '%s'\n",
+                option_count, comp->name);
+    }
+    return 0;
+}
+
+/**
+ * @brief Generates all possible placement options for a component
+ *
+ * This expands the search space by considering multiple sliding positions
+ * for each constraint, rather than just one placement per constraint.
+ *
+ * @param solver       The layout solver instance
+ * @param comp         Component to generate options for
+ * @param options      Output array for placement options
+ * @param option_count Output count of placement options
+ */
+void get_placement_options(LayoutSolver* solver, Component* comp, PlacementOption* options, int* option_count) {
+    *option_count = 0;
+
+    for (int i = 0; i < solver->constraint_count; i++) {
+        DSLConstraint* constraint = &solver->constraints[i];
+        Component* other_comp = NULL;
+        Direction dir;
+
+        if (strcmp(constraint->component_a, comp->name) == 0) {
+            other_comp = find_component(solver, constraint->component_b);
+            // Reverse direction for component_a
+            switch (constraint->direction) {
+            case 'n': dir = 's'; break;
+            case 's': dir = 'n'; break;
+            case 'e': dir = 'w'; break;
+            case 'w': dir = 'e'; break;
+            default: dir = constraint->direction; break;
+            }
+        } else if (strcmp(constraint->component_b, comp->name) == 0) {
+            other_comp = find_component(solver, constraint->component_a);
+            dir = constraint->direction; // Use direction as-is for component_b
+        }
+
+        if (other_comp && other_comp->is_placed && *option_count < MAX_CONSTRAINTS * 10) {
+            // Generate multiple sliding positions for this constraint
+            int base_x, base_y, dx, dy, slide_min, slide_max;
+
+            switch (dir) {
+            case 'n':
+                base_x = other_comp->placed_x;
+                base_y = other_comp->placed_y - comp->height;
+                dx = 1; dy = 0;
+                slide_min = -other_comp->width;
+                slide_max = other_comp->width;
+                break;
+            case 's':
+                base_x = other_comp->placed_x;
+                base_y = other_comp->placed_y + other_comp->height;
+                dx = 1; dy = 0;
+                slide_min = -other_comp->width;
+                slide_max = other_comp->width;
+                break;
+            case 'e':
+                base_x = other_comp->placed_x + other_comp->width;
+                base_y = other_comp->placed_y;
+                dx = 0; dy = 1;
+                slide_min = -other_comp->height;
+                slide_max = other_comp->height;
+                break;
+            case 'w':
+                base_x = other_comp->placed_x - comp->width;
+                base_y = other_comp->placed_y;
+                dx = 0; dy = 1;
+                slide_min = -other_comp->height;
+                slide_max = other_comp->height;
+                break;
+            default:
+                continue;
+            }
+
+            // Use wall alignment logic with random preference
+            int prefer_left_or_top = rand() % 2;
+            int positions_added = 0;
+
+            // Phase 1: Try wall alignment positions first (ensuring adjacency)
+            if ((dir == 'n' || dir == 's') && *option_count < MAX_CONSTRAINTS * 10) {
+                // For north/south: try left edge, right edge alignment with proper adjacency
+                int align_left = other_comp->placed_x;
+                int align_right = other_comp->placed_x + other_comp->width - comp->width;
+
+                // Ensure alignment positions are within valid sliding range for adjacency
+                if (prefer_left_or_top) {
+                    // Try left alignment first
+                    if (align_left >= base_x + slide_min && align_left <= base_x + slide_max) {
+                        int comp_index = comp - solver->components;
+                        if (!is_position_failed(solver, comp_index, align_left, base_y)) {
+                            options[*option_count].constraint = constraint;
+                            options[*option_count].other_comp = other_comp;
+                            options[*option_count].dir = dir;
+                            options[*option_count].x = align_left;
+                            options[*option_count].y = base_y;
+                            (*option_count)++;
+                            positions_added++;
+                        }
+                    }
+                    if (align_right >= base_x + slide_min && align_right <= base_x + slide_max) {
+                        options[*option_count].constraint = constraint;
+                        options[*option_count].other_comp = other_comp;
+                        options[*option_count].dir = dir;
+                        options[*option_count].x = align_right;
+                        options[*option_count].y = base_y;
+                        (*option_count)++;
+                        positions_added++;
+                    }
+                } else {
+                    // Try right alignment first
+                    if (align_right >= base_x + slide_min && align_right <= base_x + slide_max) {
+                        options[*option_count].constraint = constraint;
+                        options[*option_count].other_comp = other_comp;
+                        options[*option_count].dir = dir;
+                        options[*option_count].x = align_right;
+                        options[*option_count].y = base_y;
+                        (*option_count)++;
+                        positions_added++;
+                    }
+                    if (align_left >= base_x + slide_min && align_left <= base_x + slide_max) {
+                        options[*option_count].constraint = constraint;
+                        options[*option_count].other_comp = other_comp;
+                        options[*option_count].dir = dir;
+                        options[*option_count].x = align_left;
+                        options[*option_count].y = base_y;
+                        (*option_count)++;
+                        positions_added++;
+                    }
+                }
+            } else if ((dir == 'e' || dir == 'w') && *option_count < MAX_CONSTRAINTS * 10) {
+                // For east/west: try top edge, bottom edge alignment with proper adjacency
+                int align_top = other_comp->placed_y;
+                int align_bottom = other_comp->placed_y + other_comp->height - comp->height;
+
+                // Ensure alignment positions are within valid sliding range for adjacency
+                if (prefer_left_or_top) {
+                    // Try top alignment first
+                    if (align_top >= base_y + slide_min && align_top <= base_y + slide_max) {
+                        options[*option_count].constraint = constraint;
+                        options[*option_count].other_comp = other_comp;
+                        options[*option_count].dir = dir;
+                        options[*option_count].x = base_x;
+                        options[*option_count].y = align_top;
+                        (*option_count)++;
+                        positions_added++;
+                    }
+                    if (align_bottom >= base_y + slide_min && align_bottom <= base_y + slide_max) {
+                        options[*option_count].constraint = constraint;
+                        options[*option_count].other_comp = other_comp;
+                        options[*option_count].dir = dir;
+                        options[*option_count].x = base_x;
+                        options[*option_count].y = align_bottom;
+                        (*option_count)++;
+                        positions_added++;
+                    }
+                } else {
+                    // Try bottom alignment first
+                    if (align_bottom >= base_y + slide_min && align_bottom <= base_y + slide_max) {
+                        options[*option_count].constraint = constraint;
+                        options[*option_count].other_comp = other_comp;
+                        options[*option_count].dir = dir;
+                        options[*option_count].x = base_x;
+                        options[*option_count].y = align_bottom;
+                        (*option_count)++;
+                        positions_added++;
+                    }
+                    if (align_top >= base_y + slide_min && align_top <= base_y + slide_max) {
+                        options[*option_count].constraint = constraint;
+                        options[*option_count].other_comp = other_comp;
+                        options[*option_count].dir = dir;
+                        options[*option_count].x = base_x;
+                        options[*option_count].y = align_top;
+                        (*option_count)++;
+                        positions_added++;
+                    }
+                }
+            }
+
+            // Phase 2: Add smart sliding positions based on overlap requirements
+            // Calculate the range of slides that would create ANY overlap
+            int min_overlap_slide, max_overlap_slide;
+
+            if (dir == 'n' || dir == 's') {
+                // For north/south: need horizontal overlap
+                // Component at slide_x must overlap with other_comp at other_comp->placed_x
+                // Overlap exists when: slide_x < other_comp->placed_x + other_comp->width AND
+                //                     slide_x + comp->width > other_comp->placed_x
+                min_overlap_slide = other_comp->placed_x - comp->width + 1 - base_x;
+                max_overlap_slide = other_comp->placed_x + other_comp->width - 1 - base_x;
+            } else { // 'e' or 'w'
+                // For east/west: need vertical overlap
+                min_overlap_slide = other_comp->placed_y - comp->height + 1 - base_y;
+                max_overlap_slide = other_comp->placed_y + other_comp->height - 1 - base_y;
+            }
+
+            // Clamp to reasonable bounds to avoid excessive positions
+            if (min_overlap_slide < slide_min) min_overlap_slide = slide_min;
+            if (max_overlap_slide > slide_max) max_overlap_slide = slide_max;
+
+            // Create sorted list of positions by overlap amount (highest first)
+            typedef struct {
+                int slide_value;
+                int overlap_amount;
+                int x, y;
+            } OverlapPosition;
+
+            OverlapPosition overlap_positions[100]; // Reasonable limit
+            int overlap_count = 0;
+
+            for (int slide = min_overlap_slide; slide <= max_overlap_slide && overlap_count < 100; slide++) {
+                int slide_x = base_x + slide * dx;
+                int slide_y = base_y + slide * dy;
+
+                // Calculate overlap amount for this position
+                int overlap = 0;
+                if (dir == 'n' || dir == 's') {
+                    // Horizontal overlap amount
+                    int overlap_start = (slide_x > other_comp->placed_x) ? slide_x : other_comp->placed_x;
+                    int overlap_end = ((slide_x + comp->width) < (other_comp->placed_x + other_comp->width))
+                                        ? (slide_x + comp->width) : (other_comp->placed_x + other_comp->width);
+                    overlap = overlap_end - overlap_start;
+                } else {
+                    // Vertical overlap amount
+                    int overlap_start = (slide_y > other_comp->placed_y) ? slide_y : other_comp->placed_y;
+                    int overlap_end = ((slide_y + comp->height) < (other_comp->placed_y + other_comp->height))
+                                        ? (slide_y + comp->height) : (other_comp->placed_y + other_comp->height);
+                    overlap = overlap_end - overlap_start;
+                }
+
+                if (overlap > 0) {
+                    overlap_positions[overlap_count].slide_value = slide;
+                    overlap_positions[overlap_count].overlap_amount = overlap;
+                    overlap_positions[overlap_count].x = slide_x;
+                    overlap_positions[overlap_count].y = slide_y;
+                    overlap_count++;
+                }
+            }
+
+            // Sort by overlap amount (highest first)
+            for (int i = 0; i < overlap_count - 1; i++) {
+                for (int j = i + 1; j < overlap_count; j++) {
+                    if (overlap_positions[j].overlap_amount > overlap_positions[i].overlap_amount) {
+                        OverlapPosition temp = overlap_positions[i];
+                        overlap_positions[i] = overlap_positions[j];
+                        overlap_positions[j] = temp;
+                    }
+                }
+            }
+
+            // Add sorted positions, avoiding duplicates
+            for (int i = 0; i < overlap_count && *option_count < MAX_CONSTRAINTS * 10; i++) {
+                // Skip if this position was already added as wall alignment
+                int already_added = 0;
+                for (int check = *option_count - positions_added; check < *option_count; check++) {
+                    if (options[check].x == overlap_positions[i].x && options[check].y == overlap_positions[i].y) {
+                        already_added = 1;
+                        break;
+                    }
+                }
+
+                if (!already_added) {
+                    // Check if this position has failed before for this component
+                    int comp_index = comp - solver->components;
+                    if (!is_position_failed(solver, comp_index, overlap_positions[i].x, overlap_positions[i].y)) {
+                        options[*option_count].constraint = constraint;
+                        options[*option_count].other_comp = other_comp;
+                        options[*option_count].dir = dir;
+                        options[*option_count].x = overlap_positions[i].x;
+                        options[*option_count].y = overlap_positions[i].y;
+                        (*option_count)++;
+                    } else if (solver->debug_file) {
+                        fprintf(solver->debug_file, "🚫 SKIPPED FAILED: (%d,%d) previously failed for '%s'\n",
+                                overlap_positions[i].x, overlap_positions[i].y, comp->name);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// FAILED POSITION TRACKING FUNCTIONS
+// =============================================================================
+
+/**
+ * @brief Records a failed placement position for a component to avoid retrying
+ */
+void record_failed_position(LayoutSolver* solver, int component_index, int x, int y) {
+    if (component_index < 0 || component_index >= MAX_COMPONENTS) return;
+
+    int count = solver->failed_counts[component_index];
+    if (count >= 200) return; // Avoid overflow
+
+    // Check if position already recorded
+    for (int i = 0; i < count; i++) {
+        if (solver->failed_positions[component_index][i].valid &&
+            solver->failed_positions[component_index][i].x == x &&
+            solver->failed_positions[component_index][i].y == y) {
+            return; // Already recorded
+        }
+    }
+
+    // Add new failed position
+    solver->failed_positions[component_index][count].x = x;
+    solver->failed_positions[component_index][count].y = y;
+    solver->failed_positions[component_index][count].valid = 1;
+    solver->failed_counts[component_index]++;
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "📝 RECORDED FAILURE: component %d at (%d,%d) - total failures: %d\n",
+                component_index, x, y, solver->failed_counts[component_index]);
+    }
+}
+
+/**
+ * @brief Checks if a position has previously failed for this component
+ */
+int is_position_failed(LayoutSolver* solver, int component_index, int x, int y) {
+    if (component_index < 0 || component_index >= MAX_COMPONENTS) return 0;
+
+    int count = solver->failed_counts[component_index];
+    for (int i = 0; i < count; i++) {
+        if (solver->failed_positions[component_index][i].valid &&
+            solver->failed_positions[component_index][i].x == x &&
+            solver->failed_positions[component_index][i].y == y) {
+            return 1; // Position has failed before
+        }
+    }
+    return 0; // Position not tried or succeeded before
+}
+
+/**
+ * @brief Clears failed positions for a component (when backtracking to earlier state)
+ */
+void clear_failed_positions(LayoutSolver* solver, int component_index) {
+    if (component_index < 0 || component_index >= MAX_COMPONENTS) return;
+
+    solver->failed_counts[component_index] = 0;
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "🧹 CLEARED FAILURES: component %d failure history reset\n", component_index);
+    }
+}
+
+// =============================================================================
+// GRID NORMALIZATION AND DISPLAY FUNCTIONS
+// =============================================================================
+
 void normalize_grid_coordinates(LayoutSolver *solver) {
   if (solver->grid_min_x >= 0 && solver->grid_min_y >= 0) {
     return; // Already normalized
@@ -1099,285 +1767,6 @@ void normalize_grid_coordinates(LayoutSolver *solver) {
   solver->grid_min_y = 0;
 }
 
-/**
- * @brief Main dynamic constraint satisfaction algorithm
- * 
- * Implements the complete constraint solving workflow:
- * 1. Places most constrained component at origin
- * 2. Iteratively places remaining components using sliding algorithm
- * 3. Maintains debug logging throughout process
- * 4. Normalizes coordinates for final output
- * 
- * Features:
- * - Most-constrained-first heuristic
- * - Dynamic grid expansion
- * - Sliding placement with overlap validation
- * - Component grouping for spatial relationships
- * - Comprehensive debug visualization
- * - Iteration limits to prevent infinite loops
- * 
- * @param solver The layout solver instance
- * @return       1 if all components placed successfully, 0 if failed
- */
-int solve_dynamic_constraints(LayoutSolver *solver) {
-  if (solver->component_count == 0) {
-    return 1; // Nothing to solve
-  }
-
-  // Initialize debug file
-  init_debug_file(solver);
-
-  printf("🧠 Starting dynamic constraint solver...\n");
-
-  // Find most constrained component and place it at origin
-  Component *first_comp = find_most_constrained_unplaced(solver);
-  if (!first_comp) {
-    close_debug_file(solver);
-    return 0; // No components found
-  }
-
-  printf("📍 Placing first component '%s' at origin (0,0)\n", first_comp->name);
-
-  // Log constraint analysis for first component
-  debug_log_constraint_analysis(solver, first_comp);
-
-  // Initialize grid to fit first component
-  solver->grid_width = first_comp->width;
-  solver->grid_height = first_comp->height;
-  solver->grid_min_x = 0;
-  solver->grid_min_y = 0;
-
-  // Place first component
-  first_comp->placed_x = 0;
-  first_comp->placed_y = 0;
-  first_comp->is_placed = 1;
-  first_comp->group_id = solver->next_group_id++;
-
-  // Place on grid
-  for (int row = 0; row < first_comp->height; row++) {
-    for (int col = 0; col < first_comp->width; col++) {
-      if (first_comp->ascii_tile[row][col] != ' ') {
-        solver->grid[row][col] = first_comp->ascii_tile[row][col];
-      }
-    }
-  }
-
-  // Log initial grid state
-  debug_log_grid_state(solver, "AFTER FIRST COMPONENT PLACEMENT");
-
-  // Place remaining components
-  while (1) {
-    solver->total_iterations++;
-    if (solver->total_iterations > MAX_SOLVER_ITERATIONS) {
-      printf("❌ Maximum iterations reached\n");
-
-      if (solver->debug_file) {
-        fprintf(solver->debug_file,
-                "❌ SOLVER TERMINATED: Maximum iterations (%d) reached\n",
-                MAX_SOLVER_ITERATIONS);
-      }
-
-      close_debug_file(solver);
-      return 0;
-    }
-
-    Component *next_comp = find_most_constrained_unplaced(solver);
-    if (!next_comp) {
-      break; // All components placed
-    }
-
-    printf("🔧 Placing component '%s'\n", next_comp->name);
-
-    // Log constraint analysis for this component
-    debug_log_constraint_analysis(solver, next_comp);
-
-    // Find constraints involving this component
-    int placed = 0;
-    for (int i = 0; i < solver->constraint_count && !placed; i++) {
-      DSLConstraint *constraint = &solver->constraints[i];
-      Component *other_comp = NULL;
-      Direction dir;
-
-      if (strcmp(constraint->component_a, next_comp->name) == 0) {
-        other_comp = find_component(solver, constraint->component_b);
-        dir = constraint->direction;
-      } else if (strcmp(constraint->component_b, next_comp->name) == 0) {
-        other_comp = find_component(solver, constraint->component_a);
-        // Reverse direction for component_b
-        switch (constraint->direction) {
-        case 'n':
-          dir = 's';
-          break;
-        case 's':
-          dir = 'n';
-          break;
-        case 'e':
-          dir = 'w';
-          break;
-        case 'w':
-          dir = 'e';
-          break;
-        default:
-          dir = constraint->direction;
-          break;
-        }
-      }
-
-      if (other_comp && other_comp->is_placed) {
-        printf("  💡 Trying to satisfy constraint with '%s' (direction: %c)\n",
-               other_comp->name, dir);
-
-        if (solver->debug_file) {
-          fprintf(solver->debug_file,
-                  "ATTEMPTING TO PLACE: %s relative to %s (direction: %c)\n",
-                  next_comp->name, other_comp->name, dir);
-          fflush(solver->debug_file);
-        }
-
-        if (try_place_with_sliding(solver, next_comp, other_comp, dir)) {
-          next_comp->group_id = other_comp->group_id; // Join the group
-          printf("  ✅ Successfully placed '%s' at (%d, %d)\n", next_comp->name,
-                 next_comp->placed_x, next_comp->placed_y);
-          placed = 1;
-
-          // Log updated grid state
-          debug_log_grid_state(solver, "AFTER SUCCESSFUL PLACEMENT");
-        }
-      }
-    }
-
-    if (!placed) {
-      printf("  ❌ Could not place component '%s'\n", next_comp->name);
-
-      if (solver->debug_file) {
-        fprintf(solver->debug_file,
-                "❌ FAILED TO PLACE: %s - No valid position found\n",
-                next_comp->name);
-        fflush(solver->debug_file);
-      }
-
-      close_debug_file(solver);
-      return 0; // Failed to place component
-    }
-  }
-
-  // Normalize coordinates
-  normalize_grid_coordinates(solver);
-
-  // Log final grid state
-  debug_log_grid_state(solver, "FINAL - AFTER NORMALIZATION");
-
-  printf("🎉 All components placed successfully!\n");
-
-  // Close debug file
-  close_debug_file(solver);
-  return 1;
-}
-
-/**
- * @brief Primary constraint solving interface
- * 
- * Wrapper function that delegates to the dynamic constraint solver.
- * Provides backwards compatibility while using the advanced dynamic
- * placement algorithm internally.
- * 
- * @param solver The layout solver instance
- * @return       1 if solution found, 0 if failed
- */
-int solve_constraints(LayoutSolver *solver) {
-  return solve_dynamic_constraints(solver);
-}
-
-// =============================================================================
-// DISPLAY FUNCTIONS
-// =============================================================================
-
-/**
- * @brief Displays all parsed components with their ASCII art
- * 
- * Console output function that shows component names, dimensions, and
- * ASCII tile representations. Limited output size for readability.
- * 
- * @param solver The layout solver instance
- */
-void display_components(LayoutSolver *solver) {
-  printf("\n📦 PARSED COMPONENTS:\n");
-  printf("=====================\n");
-
-  for (int i = 0; i < solver->component_count; i++) {
-    Component *comp = &solver->components[i];
-    printf("\n**%s** (%dx%d):\n", comp->name, comp->width, comp->height);
-
-    for (int row = 0; row < comp->height && row < 10; row++) {  // Limit height
-      for (int col = 0; col < comp->width && col < 30; col++) { // Limit width
-        printf("%c", comp->ascii_tile[row][col]);
-      }
-      printf("\n");
-    }
-  }
-}
-
-/**
- * @brief Displays all parsed constraints in human-readable format
- * 
- * Console output function showing constraint types, components involved,
- * and directional relationships in expanded format.
- * 
- * @param solver The layout solver instance
- */
-void display_constraints(LayoutSolver *solver) {
-  printf("\n📋 PARSED CONSTRAINTS:\n");
-  printf("======================\n");
-
-  for (int i = 0; i < solver->constraint_count; i++) {
-    DSLConstraint *c = &solver->constraints[i];
-
-    const char *type_name;
-    switch (c->type) {
-    case DSL_ADJACENT:
-      type_name = "ADJACENT";
-      break;
-    default:
-      type_name = "UNKNOWN";
-      break;
-    }
-
-    const char *dir_name;
-    switch (c->direction) {
-    case 'n':
-      dir_name = "NORTH";
-      break;
-    case 'e':
-      dir_name = "EAST";
-      break;
-    case 's':
-      dir_name = "SOUTH";
-      break;
-    case 'w':
-      dir_name = "WEST";
-      break;
-    case 'a':
-      dir_name = "ANY";
-      break;
-    default:
-      dir_name = "NONE";
-      break;
-    }
-
-    printf("  %d. %s(%s, %s, %s)\n", i + 1, type_name, c->component_a,
-           c->component_b, dir_name);
-  }
-}
-
-/**
- * @brief Displays the final solved layout as ASCII art
- * 
- * Renders the complete structure layout by compositing all placed components.
- * Automatically calculates display bounds and limits output size for console
- * viewing. This is the primary visual output of the solver.
- * 
- * @param solver The layout solver instance
- */
 void display_grid(LayoutSolver *solver) {
   printf("\n🏗️  Generated Structure Layout:\n");
   printf("=================================\n");
@@ -1433,67 +1822,4 @@ void display_grid(LayoutSolver *solver) {
     printf("\n");
   }
   printf("=================================\n");
-}
-
-/**
- * @brief Verifies that all constraints are satisfied in the final solution
- * 
- * Post-solving validation that checks each constraint against the actual
- * component placements. Reports satisfaction status for debugging and
- * solution verification.
- * 
- * @param solver The layout solver instance
- */
-void verify_solution(LayoutSolver *solver) {
-  printf("\n🔍 CONSTRAINT VERIFICATION:\n");
-  printf("===========================\n");
-
-  for (int i = 0; i < solver->constraint_count; i++) {
-    DSLConstraint *c = &solver->constraints[i];
-    Component *comp_a = find_component(solver, c->component_a);
-    Component *comp_b = find_component(solver, c->component_b);
-
-    if (!comp_a || !comp_b || !comp_a->is_placed || !comp_b->is_placed) {
-      printf("  ❌ %s(%s, %s): Components not found or not placed\n",
-             (c->type == DSL_ADJACENT ? "ADJACENT" : "OTHER"), c->component_a,
-             c->component_b);
-      continue;
-    }
-
-    const char *type_name = (c->type == DSL_ADJACENT ? "ADJACENT" : "UNKNOWN");
-
-    // Check if constraint is satisfied based on direction
-    int satisfied = 0;
-    switch (c->direction) {
-    case 'n': // comp_b north of comp_a
-      satisfied = (comp_b->placed_y + comp_b->height == comp_a->placed_y) &&
-                  has_horizontal_overlap(comp_a->placed_x, comp_a->width,
-                                         comp_b->placed_x, comp_b->width);
-      break;
-    case 's': // comp_b south of comp_a
-      satisfied = (comp_a->placed_y + comp_a->height == comp_b->placed_y) &&
-                  has_horizontal_overlap(comp_a->placed_x, comp_a->width,
-                                         comp_b->placed_x, comp_b->width);
-      break;
-    case 'e': // comp_b east of comp_a
-      satisfied = (comp_a->placed_x + comp_a->width == comp_b->placed_x) &&
-                  has_vertical_overlap(comp_a->placed_y, comp_a->height,
-                                       comp_b->placed_y, comp_b->height);
-      break;
-    case 'w': // comp_b west of comp_a
-      satisfied = (comp_b->placed_x + comp_b->width == comp_a->placed_x) &&
-                  has_vertical_overlap(comp_a->placed_y, comp_a->height,
-                                       comp_b->placed_y, comp_b->height);
-      break;
-    default:
-      satisfied = 1; // Unknown direction - assume satisfied
-      break;
-    }
-
-    printf("  %s(%s, %s): %s\n", type_name, c->component_a, c->component_b,
-           satisfied ? "✅ SATISFIED" : "❌ VIOLATED");
-    printf("    %s at (%d,%d), %s at (%d,%d)\n\n", comp_a->name,
-           comp_a->placed_x, comp_a->placed_y, comp_b->name, comp_b->placed_x,
-           comp_b->placed_y);
-  }
 }
