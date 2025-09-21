@@ -129,10 +129,52 @@ int parse_specification_string(const char* specification, LayoutSolver* solver) 
         // Check for section headers
         if (strstr(line, "## Components") || strstr(line, "Components")) {
             current_section = SECTION_COMPONENTS;
+            printf("📋 Found Components section\n");
         } else if (strstr(line, "## Constraints") || strstr(line, "Constraints")) {
             current_section = SECTION_CONSTRAINTS;
+            printf("📋 Found Constraints section\n");
         } else if (strstr(line, "## Component Tiles") || strstr(line, "Component Tiles")) {
             current_section = SECTION_TILES;
+            printf("📋 Found Component Tiles section\n");
+        }
+
+        // Parse components in the Components section
+        if (current_section == SECTION_COMPONENTS) {
+            // Look for **ComponentName** - description format
+            char* first_star = strstr(line, "**");
+            if (first_star) {
+                char* second_star = strstr(first_star + 2, "**");
+                if (second_star) {
+                    char* start = first_star + 2;
+                    char* end = second_star;
+                    if (end && end > start) {
+                        int len = end - start;
+                        if (len < (int)sizeof(current_component)) {
+                            strncpy(current_component, start, len);
+                            current_component[len] = '\0';
+                            printf("  🏷️  Found component: '%s'\n", current_component);
+                        }
+                    }
+                }
+            }
+            // Handle numbered list format: "1. Component Name"
+            else if ((line[0] >= '1' && line[0] <= '9') && strstr(line, ". ")) {
+                char* start = strstr(line, ". ") + 2;
+                // Find end of component name (before newline or dash)
+                char* end = strchr(start, '\n');
+                if (!end) end = strchr(start, '-');
+                if (!end) end = start + strlen(start);
+
+                // Trim whitespace from end
+                while (end > start && (*(end-1) == ' ' || *(end-1) == '\t')) end--;
+
+                int len = end - start;
+                if (len > 0 && len < (int)sizeof(current_component)) {
+                    strncpy(current_component, start, len);
+                    current_component[len] = '\0';
+                    printf("  🏷️  Found numbered component: '%s'\n", current_component);
+                }
+            }
         }
         
         // Parse component tiles
@@ -154,35 +196,38 @@ int parse_specification_string(const char* specification, LayoutSolver* solver) 
                     if (strlen(tile_buffer) > 0) strcat(tile_buffer, "\n");
                     strcat(tile_buffer, line);
                 }
-            } else if (strstr(line, "**") && strstr(line, ":**")) {
-                // Component name in markdown format
-                char* start = strstr(line, "**") + 2;
-                char* end = strstr(start, ":**");
-                if (end && end > start) {
-                    int len = end - start;
-                    if (len < (int)sizeof(current_component)) {
-                        strncpy(current_component, start, len);
-                        current_component[len] = '\0';
-                        
-                        // Remove trailing colon if present
-                        char* colon = strchr(current_component, ':');
-                        if (colon) *colon = '\0';
+            } else if (strstr(line, "**") && !in_code_block) {
+                // Component name in Component Tiles section: **ComponentName**
+                char* first_star = strstr(line, "**");
+                if (first_star) {
+                    char* second_star = strstr(first_star + 2, "**");
+                    if (second_star) {
+                        char* start = first_star + 2;
+                        char* end = second_star;
+                        if (end && end > start) {
+                            int len = end - start;
+                            if (len < (int)sizeof(current_component)) {
+                                strncpy(current_component, start, len);
+                                current_component[len] = '\0';
+                                printf("  🏷️  Found tile component name: '%s'\n", current_component);
+                            }
+                        }
                     }
                 }
-            } else if (strstr(line, ":") && !in_code_block) {
-                // Component name in "Name:" format (LLM generated)
+            } else if (strstr(line, ":") && !in_code_block && !strstr(line, "**")) {
+                // Component name in "Name:" format (fallback)
                 char* colon = strchr(line, ':');
                 if (colon) {
                     int len = colon - line;
                     if (len > 0 && len < (int)sizeof(current_component)) {
                         strncpy(current_component, line, len);
                         current_component[len] = '\0';
-                        
+
                         // Trim whitespace
                         while (len > 0 && current_component[len-1] == ' ') {
                             current_component[--len] = '\0';
                         }
-                        printf("  🏷️  Found component name: '%s'\n", current_component);
+                        printf("  🏷️  Found fallback component name: '%s'\n", current_component);
                     }
                 }
             }
@@ -190,7 +235,14 @@ int parse_specification_string(const char* specification, LayoutSolver* solver) 
         
         // Parse constraints
         if (current_section == SECTION_CONSTRAINTS && strstr(line, "(")) {
-            add_constraint(solver, line);
+            // Handle bullet point format (- ADJACENT(...))
+            char* constraint_start = line;
+            if (*constraint_start == '-' || *constraint_start == '*') {
+                constraint_start++;
+                while (*constraint_start == ' ' || *constraint_start == '\t') constraint_start++; // Skip whitespace
+            }
+            printf("  🔗 Found constraint: '%s'\n", constraint_start);
+            add_constraint(solver, constraint_start);
         }
         
         line = strtok(NULL, "\n");
@@ -250,6 +302,9 @@ int main() {
     char output_buffer[32768]; // Increased to 32KB for larger LLM responses
     char structure_type[256];
     int choice;
+
+    // Initialize output buffer
+    memset(output_buffer, 0, sizeof(output_buffer));
 
     printf("ASCII Structure System - Phase 1 (DSL) + Phase 2 (Solver)\n");
     printf("This system generates and solves structure layouts using DSL constraints.\n");
@@ -337,6 +392,7 @@ int main() {
         } else {
             printf("❌ Failed to generate structure specification.\n");
         }
+        return 0; // Exit after processing LLM request
     }
 
     return 0;

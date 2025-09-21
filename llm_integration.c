@@ -32,15 +32,15 @@ void generate_dsl_prompt(const char* structure_type, char* system_prompt, char* 
         "2. Spatial and functional constraints\n"
         "3. Self-contained ASCII components (tiles) to be assembled later by an external constraint solver\n\n"
         "🧱 Step 1: Identify Core Components\n\n"
-        "List and briefly describe the individual components that make up the structure (e.g., rooms, chambers, towers, vaults, courtyards). For each component, include:\n"
-        "- Name\n"
-        "- Function/purpose/narrative purpose\n"
-        "- Approximate scale (small/medium/large), scaled to a player represented by one tile (@)\n"
-        "- Notable features\n\n"
+        "List and briefly describe the individual components that make up the structure using the format:\n"
+        "**ComponentName** - Description with function, scale, and notable features.\n\n"
+        "Use this EXACT format: **Name** - description text\n"
+        "Do NOT use numbered lists or bullet points in the Components section.\n\n"
         "🧭 Step 2: Define Spatial Constraints (DSL)\n\n"
-        "Generate a list of spatial constraints using the following custom DSL format:\n"
-        "🗺️ DSL Constraint Types:\n"
-        "- ADJACENT(a, b, dir) – b must share the dir edge of a (n, e, s, w, or a for any)\n\n"
+        "Generate spatial constraints using EXACTLY this format:\n"
+        "ADJACENT(ComponentA, ComponentB, direction)\n\n"
+        "Do NOT use bullet points or dashes. Write each constraint on its own line.\n"
+        "Direction must be: n, e, s, w, or a (for any)\n\n"
         "🧩 Step 3: Generate Individual ASCII Components\n\n"
         "For each component identified in Step 1:\n"
         "- Output a standalone ASCII block representing that space\n"
@@ -154,6 +154,8 @@ int generate_structure_specification(const char* structure_type, char* output_bu
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L); // 30 second timeout
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L); // 10 second connection timeout
 
     // Make the API call
     printf("Generating %s structure specification...\n", structure_type);
@@ -172,6 +174,7 @@ int generate_structure_specification(const char* structure_type, char* output_bu
 
     // Parse response
     if (response.data) {
+        printf("📥 Received API response (%zu bytes)\n", response.size);
         cJSON *json = cJSON_Parse(response.data);
         if (json) {
             cJSON *choices = cJSON_GetObjectItem(json, "choices");
@@ -179,15 +182,24 @@ int generate_structure_specification(const char* structure_type, char* output_bu
                 cJSON *first_choice = cJSON_GetArrayItem(choices, 0);
                 cJSON *message = cJSON_GetObjectItem(first_choice, "message");
                 cJSON *content = cJSON_GetObjectItem(message, "content");
-                
+
                 if (content && cJSON_IsString(content)) {
                     strncpy(output_buffer, content->valuestring, buffer_size - 1);
                     output_buffer[buffer_size - 1] = '\0';
+                    printf("✅ Successfully extracted DSL content (%zu bytes)\n", strlen(output_buffer));
+                } else {
+                    printf("❌ No content found in API response\n");
                 }
+            } else {
+                printf("❌ No choices found in API response\n");
             }
             cJSON_Delete(json);
+        } else {
+            printf("❌ Failed to parse JSON response: %.200s...\n", response.data);
         }
         free(response.data);
+    } else {
+        printf("❌ No response data received\n");
     }
 
     return 0;
