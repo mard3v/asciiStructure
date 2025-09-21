@@ -209,6 +209,11 @@ int parse_specification_string(const char* specification, LayoutSolver* solver) 
                             if (len < (int)sizeof(current_component)) {
                                 strncpy(current_component, start, len);
                                 current_component[len] = '\0';
+
+                                // Remove trailing colon if present
+                                char* colon = strchr(current_component, ':');
+                                if (colon) *colon = '\0';
+
                                 printf("  🏷️  Found tile component name: '%s'\n", current_component);
                             }
                         }
@@ -326,7 +331,7 @@ int main() {
                 printf("Enter filename: ");
                 scanf("%255s", structure_type);
                 parse_and_solve_specification(structure_type);
-                continue;
+                return 0; // Exit after processing
             case 8:
                 // Test string parsing with test_castle.txt content
                 {

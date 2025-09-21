@@ -757,6 +757,49 @@ int has_overlap(LayoutSolver *solver, Component *comp, int x, int y) {
 }
 
 /**
+ * @brief Checks if two components would overlap at specified positions
+ *
+ * Tests if placing comp1 at (x1, y1) would overlap with comp2 at (x2, y2).
+ * Only non-space characters count as occupied space.
+ *
+ * @param solver The layout solver instance
+ * @param comp1  First component
+ * @param x1     First component x position
+ * @param y1     First component y position
+ * @param comp2  Second component
+ * @param x2     Second component x position
+ * @param y2     Second component y position
+ * @return       1 if overlap detected, 0 if no overlap
+ */
+int has_character_overlap(LayoutSolver *solver, Component *comp1, int x1, int y1,
+                         Component *comp2, int x2, int y2) {
+    // Check each non-space character in comp1
+    for (int row1 = 0; row1 < comp1->height; row1++) {
+        for (int col1 = 0; col1 < comp1->width; col1++) {
+            if (comp1->ascii_tile[row1][col1] != ' ') {
+                int world_x1 = x1 + col1;
+                int world_y1 = y1 + row1;
+
+                // Check if this position overlaps with any non-space character in comp2
+                for (int row2 = 0; row2 < comp2->height; row2++) {
+                    for (int col2 = 0; col2 < comp2->width; col2++) {
+                        if (comp2->ascii_tile[row2][col2] != ' ') {
+                            int world_x2 = x2 + col2;
+                            int world_y2 = y2 + row2;
+
+                            if (world_x1 == world_x2 && world_y1 == world_y2) {
+                                return 1; // Overlap detected
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0; // No overlap
+}
+
+/**
  * @brief Expands the dynamic grid to accommodate component placement
  * 
  * Dynamically resizes the grid to include the specified component at the
@@ -1159,10 +1202,19 @@ int solve_recursive_tree(LayoutSolver* solver) {
 
     // Initialize debug file
     init_debug_file(solver);
-    printf("🌳 Starting recursive backtracking search...\n");
+    printf("🌳 Starting intelligent recursive backtracking search...\n");
 
-    // Place first component at origin (this is our root node)
-    Component* first_comp = find_most_constrained_unplaced(solver);
+    // Phase 1: Analyze constraint dependencies and calculate mobility
+    printf("🔍 Analyzing constraint dependencies...\n");
+    analyze_constraint_dependencies(solver);
+    calculate_mobility_scores(solver);
+    determine_placement_order(solver);
+
+    // Place first component at origin using intelligent ordering
+    // Get the first component from placement order
+    int first_comp_idx = solver->placement_order[0];
+    Component* first_comp = &solver->components[first_comp_idx];
+
     if (!first_comp) {
         close_debug_file(solver);
         return 0;
@@ -1212,6 +1264,23 @@ int solve_recursive_tree(LayoutSolver* solver) {
 }
 
 /**
+ * @brief Gets next unplaced component using intelligent placement order
+ *
+ * @param solver The layout solver instance
+ * @return       Next component to place, or NULL if all placed
+ */
+Component* get_next_component_intelligent(LayoutSolver* solver) {
+    for (int i = 0; i < solver->component_count; i++) {
+        int comp_idx = solver->placement_order[i];
+        Component* comp = &solver->components[comp_idx];
+        if (!comp->is_placed) {
+            return comp;
+        }
+    }
+    return NULL; // All components placed
+}
+
+/**
  * @brief Recursive function to place components using backtracking
  *
  * This is the core of the search tree. Each call represents a node in the tree,
@@ -1223,7 +1292,7 @@ int solve_recursive_tree(LayoutSolver* solver) {
  */
 int place_component_recursive(LayoutSolver* solver, int depth) {
     // Check for solution: all components placed
-    Component* next_comp = find_most_constrained_unplaced(solver);
+    Component* next_comp = get_next_component_intelligent(solver);
     if (!next_comp) {
         return 1; // Success - all components placed!
     }
@@ -1351,10 +1420,97 @@ int try_placement_options(LayoutSolver* solver, Component* comp, int depth) {
                 }
             }
         } else {
-            // Overlap detected
+            // Overlap detected - try intelligent conflict resolution
             if (solver->debug_file) {
-                fprintf(solver->debug_file, "❌ FAILED: overlap detected at (%d,%d)\n",
+                fprintf(solver->debug_file, "⚠️  OVERLAP detected at (%d,%d) - attempting intelligent resolution\n",
                         options[i].x, options[i].y);
+            }
+
+            // Phase 1: Detect specific conflicting components
+            int conflicts = detect_placement_conflicts(solver, comp, options[i].x, options[i].y);
+
+            if (conflicts > 0) {
+                // Phase 2: Attempt targeted conflict resolution
+                if (attempt_conflict_resolution(solver, comp, options[i].x, options[i].y)) {
+                    if (solver->debug_file) {
+                        fprintf(solver->debug_file, "🎯 CONFLICT RESOLVED! Retrying placement at (%d,%d)\n",
+                                options[i].x, options[i].y);
+                    }
+
+                    // Retry the placement after resolution
+                    expand_grid_for_component(solver, comp, options[i].x, options[i].y);
+
+                    if (!has_overlap(solver, comp, options[i].x, options[i].y)) {
+                        // Check constraint satisfaction again
+                        int satisfies = 0;
+                        if ((options[i].dir == 'n' || options[i].dir == 's') &&
+                            has_horizontal_overlap(options[i].x, comp->width,
+                                                 options[i].other_comp->placed_x,
+                                                 options[i].other_comp->width)) {
+                            satisfies = 1;
+                        } else if ((options[i].dir == 'e' || options[i].dir == 'w') &&
+                                   has_vertical_overlap(options[i].y, comp->height,
+                                                      options[i].other_comp->placed_y,
+                                                      options[i].other_comp->height)) {
+                            satisfies = 1;
+                        }
+
+                        if (satisfies) {
+                            // Successful placement after conflict resolution
+                            comp->placed_x = options[i].x;
+                            comp->placed_y = options[i].y;
+                            comp->is_placed = 1;
+                            comp->group_id = options[i].other_comp->group_id;
+
+                            if (solver->debug_file) {
+                                fprintf(solver->debug_file, "✅ PLACED '%s' at (%d,%d) after conflict resolution\n",
+                                        comp->name, options[i].x, options[i].y);
+                            }
+
+                            // Update grid
+                            for (int row = 0; row < comp->height; row++) {
+                                for (int col = 0; col < comp->width; col++) {
+                                    if (comp->ascii_tile[row][col] != ' ') {
+                                        int grid_x = options[i].x + col - solver->grid_min_x;
+                                        int grid_y = options[i].y + row - solver->grid_min_y;
+                                        if (grid_x >= 0 && grid_x < solver->grid_width &&
+                                            grid_y >= 0 && grid_y < solver->grid_height) {
+                                            solver->grid[grid_y][grid_x] = comp->ascii_tile[row][col];
+                                        }
+                                    }
+                                }
+                            }
+
+                            debug_log_ascii_grid(solver, "After conflict resolution placement");
+
+                            // Recursively try to place remaining components
+                            if (place_component_recursive(solver, depth + 1)) {
+                                return 1; // Solution found!
+                            }
+
+                            // This branch didn't work after resolution - backtrack
+                            if (solver->debug_file) {
+                                fprintf(solver->debug_file, "🔙 BACKTRACK: resolved branch failed, trying next option\n");
+                            }
+                        } else {
+                            if (solver->debug_file) {
+                                fprintf(solver->debug_file, "❌ CONSTRAINT UNSATISFIED after conflict resolution\n");
+                            }
+                        }
+                    } else {
+                        if (solver->debug_file) {
+                            fprintf(solver->debug_file, "❌ STILL OVERLAPPING after conflict resolution attempt\n");
+                        }
+                    }
+                } else {
+                    if (solver->debug_file) {
+                        fprintf(solver->debug_file, "❌ CONFLICT RESOLUTION FAILED - no valid relocation found\n");
+                    }
+                }
+            } else {
+                if (solver->debug_file) {
+                    fprintf(solver->debug_file, "❌ FAILED: overlap detected but no conflicts identified\n");
+                }
             }
         }
 
@@ -1822,4 +1978,261 @@ void display_grid(LayoutSolver *solver) {
     printf("\n");
   }
   printf("=================================\n");
+}
+
+// =============================================================================
+// INTELLIGENT CONFLICT RESOLUTION FUNCTIONS
+// =============================================================================
+
+/**
+ * @brief Analyzes constraint dependencies between components
+ *
+ * Builds a dependency graph showing which components are connected to others
+ * through constraints. This graph is used to determine mobility and placement priority.
+ *
+ * @param solver The layout solver instance
+ */
+void analyze_constraint_dependencies(LayoutSolver* solver) {
+    // Initialize dependency graph
+    for (int i = 0; i < MAX_COMPONENTS; i++) {
+        for (int j = 0; j < MAX_COMPONENTS; j++) {
+            solver->dependency_graph[i][j] = 0;
+        }
+    }
+
+    // Build adjacency matrix from constraints
+    for (int i = 0; i < solver->constraint_count; i++) {
+        DSLConstraint* constraint = &solver->constraints[i];
+        Component* comp1 = find_component(solver, constraint->component_a);
+        Component* comp2 = find_component(solver, constraint->component_b);
+
+        if (comp1 && comp2) {
+            int idx1 = comp1 - solver->components;
+            int idx2 = comp2 - solver->components;
+
+            // Mark bidirectional dependency
+            solver->dependency_graph[idx1][idx2] = 1;
+            solver->dependency_graph[idx2][idx1] = 1;
+        }
+    }
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "🔗 DEPENDENCY ANALYSIS:\n");
+        for (int i = 0; i < solver->component_count; i++) {
+            int connections = 0;
+            for (int j = 0; j < solver->component_count; j++) {
+                if (solver->dependency_graph[i][j]) connections++;
+            }
+            fprintf(solver->debug_file, "  %s: %d connections\n",
+                    solver->components[i].name, connections);
+        }
+    }
+}
+
+/**
+ * @brief Calculates mobility scores for all components
+ *
+ * Components with fewer constraints are more mobile (easier to move).
+ * Mobility score = number of constraints involving this component.
+ * Lower score = more mobile.
+ *
+ * @param solver The layout solver instance
+ */
+void calculate_mobility_scores(LayoutSolver* solver) {
+    for (int i = 0; i < solver->component_count; i++) {
+        Component* comp = &solver->components[i];
+        comp->constraint_count = 0;
+        comp->mobility_score = 0;
+
+        // Count constraints involving this component
+        for (int j = 0; j < solver->constraint_count; j++) {
+            DSLConstraint* constraint = &solver->constraints[j];
+            if (strcmp(constraint->component_a, comp->name) == 0 ||
+                strcmp(constraint->component_b, comp->name) == 0) {
+                comp->constraint_count++;
+            }
+        }
+
+        // Calculate mobility score (lower = more mobile)
+        comp->mobility_score = comp->constraint_count;
+
+        // Add penalty for components that are "hubs" (connected to many others)
+        int connection_count = 0;
+        for (int j = 0; j < solver->component_count; j++) {
+            if (solver->dependency_graph[i][j]) connection_count++;
+        }
+        comp->mobility_score += connection_count;
+    }
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "📊 MOBILITY ANALYSIS:\n");
+        for (int i = 0; i < solver->component_count; i++) {
+            Component* comp = &solver->components[i];
+            fprintf(solver->debug_file, "  %s: mobility_score=%d, constraints=%d\n",
+                    comp->name, comp->mobility_score, comp->constraint_count);
+        }
+    }
+}
+/**
+ * @brief Determines optimal placement order based on constraint complexity
+ *
+ * Places highly constrained components first (they have fewer valid positions),
+ * and lightly constrained components last (they can adapt around existing placements).
+ * This puts "easily movable" components near the leaves of the search tree.
+ *
+ * @param solver The layout solver instance
+ */
+void determine_placement_order(LayoutSolver* solver) {
+    // Create array of component indices sorted by mobility score (ascending)
+    for (int i = 0; i < solver->component_count; i++) {
+        solver->placement_order[i] = i;
+    }
+
+    // Sort by mobility score (higher scores placed first = most constrained first)
+    for (int i = 0; i < solver->component_count - 1; i++) {
+        for (int j = i + 1; j < solver->component_count; j++) {
+            Component* comp_i = &solver->components[solver->placement_order[i]];
+            Component* comp_j = &solver->components[solver->placement_order[j]];
+
+            if (comp_i->mobility_score < comp_j->mobility_score) {
+                // Swap - put higher mobility score first
+                int temp = solver->placement_order[i];
+                solver->placement_order[i] = solver->placement_order[j];
+                solver->placement_order[j] = temp;
+            }
+        }
+    }
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "🎯 PLACEMENT ORDER (most constrained first):\n");
+        for (int i = 0; i < solver->component_count; i++) {
+            int comp_idx = solver->placement_order[i];
+            Component* comp = &solver->components[comp_idx];
+            fprintf(solver->debug_file, "  %d. %s (mobility_score=%d)\n",
+                    i + 1, comp->name, comp->mobility_score);
+        }
+    }
+}
+
+/**
+ * @brief Detects which components are overlapping with a proposed placement
+ */
+int detect_placement_conflicts(LayoutSolver* solver, Component* target_comp, int x, int y) {
+    solver->conflict_state.overlap_count = 0;
+    solver->conflict_state.target_component = target_comp - solver->components;
+    solver->conflict_state.conflict_resolved = 0;
+
+    // Check each placed component for overlap
+    for (int i = 0; i < solver->component_count; i++) {
+        Component* existing_comp = &solver->components[i];
+
+        if (!existing_comp->is_placed || existing_comp == target_comp) {
+            continue;
+        }
+
+        // Check for rectangular overlap
+        int overlap_x = has_horizontal_overlap(x, target_comp->width,
+                                             existing_comp->placed_x, existing_comp->width);
+        int overlap_y = has_vertical_overlap(y, target_comp->height,
+                                           existing_comp->placed_y, existing_comp->height);
+
+        if (overlap_x && overlap_y) {
+            // Check for actual character overlap
+            if (has_character_overlap(solver, target_comp, x, y, existing_comp,
+                                    existing_comp->placed_x, existing_comp->placed_y)) {
+                solver->conflict_state.overlapping_components[solver->conflict_state.overlap_count] = i;
+                solver->conflict_state.overlap_count++;
+
+                if (solver->debug_file) {
+                    fprintf(solver->debug_file, "⚠️  CONFLICT DETECTED: %s at (%d,%d) overlaps with %s at (%d,%d)\n",
+                            target_comp->name, x, y,
+                            existing_comp->name, existing_comp->placed_x, existing_comp->placed_y);
+                }
+            }
+        }
+    }
+
+    return solver->conflict_state.overlap_count;
+}
+
+/**
+ * @brief Attempts to resolve placement conflicts through intelligent relocation
+ */
+int attempt_conflict_resolution(LayoutSolver* solver, Component* target_comp, int x, int y) {
+    if (solver->conflict_state.overlap_count == 0) {
+        return 1; // No conflicts to resolve
+    }
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "🛠️  ATTEMPTING CONFLICT RESOLUTION for %s\n", target_comp->name);
+    }
+
+    // Try to relocate each overlapping component, starting with most mobile
+    for (int i = 0; i < solver->conflict_state.overlap_count; i++) {
+        int comp_idx = solver->conflict_state.overlapping_components[i];
+        Component* overlapping_comp = &solver->components[comp_idx];
+
+        if (try_relocate_component(solver, comp_idx, target_comp)) {
+            if (solver->debug_file) {
+                fprintf(solver->debug_file, "  ✅ Successfully relocated %s\n", overlapping_comp->name);
+            }
+            return 1; // Conflict resolved
+        }
+    }
+
+    return 0; // Failed to resolve conflicts
+}
+
+/**
+ * @brief Attempts to relocate a component to resolve conflicts
+ */
+int try_relocate_component(LayoutSolver* solver, int comp_index, Component* target_comp) {
+    Component* comp = &solver->components[comp_index];
+
+    // Save current position
+    int original_x = comp->placed_x;
+    int original_y = comp->placed_y;
+
+    // Remove component temporarily
+    comp->is_placed = 0;
+
+    // Try different positions
+    for (int dy = -10; dy <= 10; dy += 2) {
+        for (int dx = -10; dx <= 10; dx += 2) {
+            if (dx == 0 && dy == 0) continue; // Skip original position
+
+            int new_x = original_x + dx;
+            int new_y = original_y + dy;
+
+            // Try placing at this position
+            comp->placed_x = new_x;
+            comp->placed_y = new_y;
+            comp->is_placed = 1;
+
+            // Check if this placement is valid
+            int valid_placement = 1;
+
+            // Check for overlaps with other components
+            for (int i = 0; i < solver->component_count && valid_placement; i++) {
+                Component* other_comp = &solver->components[i];
+                if (other_comp == comp || !other_comp->is_placed) continue;
+
+                if (has_character_overlap(solver, comp, new_x, new_y, other_comp,
+                                        other_comp->placed_x, other_comp->placed_y)) {
+                    valid_placement = 0;
+                }
+            }
+
+            if (valid_placement) {
+                return 1; // Successfully relocated
+            }
+        }
+    }
+
+    // Relocation failed, restore original position
+    comp->placed_x = original_x;
+    comp->placed_y = original_y;
+    comp->is_placed = 1;
+
+    return 0;
 }

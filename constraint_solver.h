@@ -46,6 +46,11 @@ typedef struct Component {
     int placed_x, placed_y;
     int is_placed;
     int group_id;  // Components with same group_id move together
+
+    // Intelligent backtracking fields
+    int mobility_score;        // Lower = more constrained, harder to move
+    int constraint_count;      // Number of constraints involving this component
+    int dependency_level;      // Placement priority (0 = place first, higher = place later)
 } Component;
 
 // Backtracking state snapshot
@@ -101,6 +106,16 @@ typedef struct LayoutSolver {
         int valid;          // Whether this entry is active
     } failed_positions[MAX_COMPONENTS][200];  // Track up to 200 failed positions per component
     int failed_counts[MAX_COMPONENTS];        // Number of failed positions for each component
+
+    // Intelligent conflict resolution fields
+    int placement_order[MAX_COMPONENTS];      // Order to place components (most constrained first)
+    int dependency_graph[MAX_COMPONENTS][MAX_COMPONENTS]; // Component dependency adjacency matrix
+    struct {
+        int overlapping_components[MAX_COMPONENTS];  // Which components are overlapping
+        int overlap_count;                          // Number of overlapping components
+        int target_component;                       // Component being placed
+        int conflict_resolved;                      // Whether conflict was resolved
+    } conflict_state;
 } LayoutSolver;
 
 // =============================================================================
@@ -143,6 +158,8 @@ int check_adjacent(int x1, int y1, int w1, int h1, int x2, int y2, int w2, int h
 int has_overlap(LayoutSolver* solver, Component* comp, int x, int y);
 int has_horizontal_overlap(int x1, int w1, int x2, int w2);
 int has_vertical_overlap(int y1, int h1, int y2, int h2);
+int has_character_overlap(LayoutSolver *solver, Component *comp1, int x1, int y1,
+                         Component *comp2, int x2, int y2);
 
 // =============================
 // CONSTRAINT VALIDATION
@@ -164,11 +181,22 @@ int restore_solver_state(LayoutSolver* solver);
 void clear_backtrack_stack(LayoutSolver* solver);
 
 // =============================
+// INTELLIGENT CONFLICT RESOLUTION
+// =============================
+void analyze_constraint_dependencies(LayoutSolver* solver);
+void calculate_mobility_scores(LayoutSolver* solver);
+void determine_placement_order(LayoutSolver* solver);
+int detect_placement_conflicts(LayoutSolver* solver, Component* target_comp, int x, int y);
+int attempt_conflict_resolution(LayoutSolver* solver, Component* target_comp, int x, int y);
+int try_relocate_component(LayoutSolver* solver, int comp_index, Component* target_comp);
+
+// =============================
 // RECURSIVE TREE SOLVER INTERNALS (PRIVATE)
 // =============================
 int place_component_recursive(LayoutSolver* solver, int depth);
 int try_placement_options(LayoutSolver* solver, Component* comp, int depth);
 void get_placement_options(LayoutSolver* solver, Component* comp, PlacementOption* options, int* option_count);
+Component* get_next_component_intelligent(LayoutSolver* solver);
 void record_failed_position(LayoutSolver* solver, int component_index, int x, int y);
 int is_position_failed(LayoutSolver* solver, int component_index, int x, int y);
 
