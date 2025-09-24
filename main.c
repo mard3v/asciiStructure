@@ -28,7 +28,7 @@ void show_menu(void);
  * @brief Displays the interactive menu with available structure types and options
  */
 void show_menu(void) {
-    printf("\n🏗️  ASCII Structure System (DSL-Based)\n");
+    printf("\n🌲 Tree-Based Constraint Solver\n");
     printf("========================================\n");
     printf("1. Generate Castle\n");
     printf("2. Generate Village\n");
@@ -40,6 +40,7 @@ void show_menu(void) {
     printf("8. Test string parsing (no API needed)\n");
     printf("0. Exit\n");
     printf("========================================\n");
+    printf("Debug output: tree_placement_debug.log\n");
     printf("Select option: ");
 }
 
@@ -260,19 +261,18 @@ int parse_specification_string(const char* specification, LayoutSolver* solver) 
 
 /**
  * @brief High-level interface for parsing and solving DSL specifications
- * 
+ *
+ * Uses the tree-based constraint solver with modular debug system.
  * Determines input type (file or string), parses the DSL specification,
- * runs the constraint solver, and displays the result. Main workflow
- * coordination function.
- * 
+ * runs the tree constraint solver, and displays the result.
+ *
  * @param specification Either a filename or DSL specification string
  */
 void parse_and_solve_specification(const char* specification) {
     LayoutSolver solver;
     init_solver(&solver, 60, 40);
-    set_solver_type(&solver, SOLVER_TREE_CONSTRAINT); // Use tree-based solver
-    
-    // If specification starts with a filename, load from file
+
+    // Parse specification from file or string
     if (strstr(specification, ".txt") && strlen(specification) < 100) {
         if (!parse_specification_file(specification, &solver)) {
             return;
@@ -283,25 +283,28 @@ void parse_and_solve_specification(const char* specification) {
             return;
         }
     }
-    
+
+    // Solve using tree-based constraint solver (generates tree_placement_debug.log)
     if (solve_constraints(&solver)) {
         display_grid(&solver);
+        printf("\n📋 Detailed tree solver debug available in: tree_placement_debug.log\n");
+    } else {
+        printf("❌ Tree constraint solver failed to find a solution\n");
     }
 }
 
 /**
  * @brief Main application entry point with interactive menu system
- * 
+ *
  * Provides menu-driven interface for:
  * - LLM-generated structure specifications
  * - File-based DSL parsing
  * - Built-in test cases
  * - Direct string parsing
- * 
- * Coordinates the two-phase process:
- * Phase 1: Generate or load DSL specification
- * Phase 2: Parse and solve constraints
- * 
+ *
+ * Uses tree-based constraint solver with modular debug system.
+ * Generates detailed debug output in tree_placement_debug.log
+ *
  * @return Program exit code
  */
 int main() {
@@ -312,8 +315,8 @@ int main() {
     // Initialize output buffer
     memset(output_buffer, 0, sizeof(output_buffer));
 
-    printf("ASCII Structure System - Phase 1 (DSL) + Phase 2 (Solver)\n");
-    printf("This system generates and solves structure layouts using DSL constraints.\n");
+    printf("ASCII Structure System - Tree-Based Constraint Solver\n");
+    printf("This system uses a tree-based constraint solver with modular debug logging.\n");
 
     while (1) {
         show_menu();

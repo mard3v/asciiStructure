@@ -53,12 +53,7 @@ typedef struct SlideChain {
     int target_x, target_y;                    // Target position we're trying to clear
 } SlideChain;
 
-// Constraint solver strategy enumeration
-typedef enum {
-    SOLVER_RECURSIVE_TREE = 0,    // Recursive backtracking search tree with pruning
-    SOLVER_TREE_CONSTRAINT = 1,   // Tree-based constraint resolution with conflict-depth backtracking
-    SOLVER_COUNT                  // Number of available solvers
-} ConstraintSolverType;
+// Only tree-based constraint solver is used now
 
 typedef struct Component {
     char name[64];
@@ -167,10 +162,7 @@ typedef struct LayoutSolver {
     FILE* debug_file;     // Debug output file for main solver
     FILE* tree_debug_file; // Debug output file for tree solver
 
-    // Solver configuration
-    ConstraintSolverType solver_type;  // Which constraint solver strategy to use
-
-    // Tree-based constraint solver
+    // Tree-based constraint solver (only solver type used)
     TreeSolver tree_solver;            // Tree-based constraint resolution state
 
     // Backtracking stack
@@ -211,13 +203,11 @@ typedef struct LayoutSolver {
 // CORE SOLVER INTERFACE
 // =============================
 void init_solver(LayoutSolver* solver, int width, int height);
-void set_solver_type(LayoutSolver* solver, ConstraintSolverType type);
 int solve_constraints(LayoutSolver* solver);
 
 // =============================
-// MODULAR SOLVER STRATEGIES
+// TREE-BASED CONSTRAINT SOLVER
 // =============================
-int solve_recursive_tree(LayoutSolver* solver);        // Recursive backtracking with pruning
 int solve_tree_constraint(LayoutSolver* solver);       // Tree-based constraint resolution
 
 // =============================
@@ -290,15 +280,7 @@ void rollback_slide_chain(LayoutSolver* solver, SlideChain* chain);
 int find_directional_slide_chain(LayoutSolver* solver, int comp_index, Direction push_dir, SlideChain* chain);
 int component_mobility_score(LayoutSolver* solver, int comp_index);
 
-// =============================
-// RECURSIVE TREE SOLVER INTERNALS (PRIVATE)
-// =============================
-int place_component_recursive(LayoutSolver* solver, int depth);
-int try_placement_options(LayoutSolver* solver, Component* comp, int depth);
-void get_placement_options(LayoutSolver* solver, Component* comp, PlacementOption* options, int* option_count);
-Component* get_next_component_intelligent(LayoutSolver* solver);
-void record_failed_position(LayoutSolver* solver, int component_index, int x, int y);
-int is_position_failed(LayoutSolver* solver, int component_index, int x, int y);
+// Legacy recursive solver functions removed
 
 // =============================
 // TREE CONSTRAINT SOLVER INTERNALS (PRIVATE)
@@ -317,17 +299,9 @@ int advance_to_next_constraint(LayoutSolver* solver);
 DSLConstraint* get_next_constraint_involving_placed(LayoutSolver* solver);
 
 // =============================
-// TREE SOLVER DEBUG FUNCTIONS
+// TREE SOLVER DEBUG FUNCTIONS - MOVED TO tree_debug.h
 // =============================
-void init_tree_debug_file(LayoutSolver* solver);
-void close_tree_debug_file(LayoutSolver* solver);
-void debug_log_tree_constraint_start(LayoutSolver* solver, DSLConstraint* constraint, Component* unplaced_comp);
-void debug_log_tree_placement_options(LayoutSolver* solver, TreePlacementOption* options, int option_count);
-void debug_log_tree_placement_attempt(LayoutSolver* solver, Component* comp, int x, int y, int option_num, int success);
-void debug_log_tree_node_creation(LayoutSolver* solver, TreeNode* node);
-void debug_log_tree_backtrack(LayoutSolver* solver, int from_depth, int to_depth, const char* reason);
-void debug_log_tree_solution_path(LayoutSolver* solver);
-void debug_log_tree_grid_state(LayoutSolver* solver, const char* stage);
+// All tree debug function declarations have been moved to tree_debug.h
 
 // =============================
 // DYNAMIC GRID SYSTEM
@@ -340,11 +314,7 @@ Component* find_most_constrained_unplaced(LayoutSolver* solver);
 // =============================
 // DEBUG AND VISUALIZATION
 // =============================
-void init_debug_file(LayoutSolver* solver);
-void close_debug_file(LayoutSolver* solver);
-void debug_log_placement_attempt(LayoutSolver* solver, Component* comp, Component* target_comp, Direction dir, int x, int y, int success);
-void debug_log_ascii_grid(LayoutSolver* solver, const char* title);
-void debug_log_placement_grid(LayoutSolver* solver, const char* title, Component* highlight_comp, int highlight_x, int highlight_y);
+// Legacy debug function declarations removed - only tree solver debug functions remain
 
 // =============================
 // OUTPUT AND VERIFICATION
