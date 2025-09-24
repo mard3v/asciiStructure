@@ -20,9 +20,6 @@
 #define MAX_OUTPUT_WIDTH 120         // Limit grid width output
 #define MAX_COMPONENT_GROUP_SIZE 20  // Maximum components in a group
 #define MAX_BACKTRACK_DEPTH 50       // Maximum backtracking depth
-#define MAX_SLIDE_CHAINS 10          // Maximum simultaneous sliding chains
-#define MAX_CHAIN_LENGTH 8           // Maximum components in a single sliding chain
-#define MAX_SLIDE_DISTANCE 20        // Maximum distance a component can slide
 
 typedef enum {
     DSL_ADJACENT
@@ -35,23 +32,6 @@ typedef enum {
 // 'w' = west (left)
 // 'a' = any direction
 typedef char Direction;
-
-// Sliding puzzle structures
-typedef struct SlideMove {
-    int component_index;                        // Which component to slide
-    Direction direction;                        // Direction to slide (n/s/e/w)
-    int distance;                              // How far to slide
-    int new_x, new_y;                          // Final position after slide
-} SlideMove;
-
-typedef struct SlideChain {
-    SlideMove moves[MAX_CHAIN_LENGTH];         // Sequence of moves to execute
-    int chain_length;                          // Number of moves in chain
-    int feasible;                              // Whether chain is geometrically valid
-    int constraint_preserving;                 // Whether chain preserves all constraints
-    int total_displacement;                    // Total grid area displacement
-    int target_x, target_y;                    // Target position we're trying to clear
-} SlideChain;
 
 // Only tree-based constraint solver is used now
 
@@ -186,13 +166,6 @@ typedef struct LayoutSolver {
         int conflict_resolved;                      // Whether conflict was resolved
     } conflict_state;
 
-    // Sliding puzzle conflict resolution
-    struct {
-        int active_chains;                          // Number of active sliding chains
-        int chain_attempts;                         // Number of chain attempts made
-        int successful_slides;                      // Number of successful slide operations
-        int max_chain_length;                       // Longest successful chain length
-    } slide_stats;
 } LayoutSolver;
 
 // =============================================================================
@@ -224,18 +197,13 @@ void place_component(LayoutSolver* solver, Component* comp, int x, int y);
 // =============================
 void add_constraint(LayoutSolver* solver, const char* constraint_line);
 int satisfies_constraints(LayoutSolver* solver, Component* comp, int x, int y);
-int check_constraint_satisfied(LayoutSolver* solver, DSLConstraint* constraint, 
-                             Component* comp1, Component* comp2, int test_x, int test_y);
 
 // =============================
 // SPATIAL RELATIONSHIP FUNCTIONS
 // =============================
-int check_adjacent(int x1, int y1, int w1, int h1, int x2, int y2, int w2, int h2, Direction dir);
 int has_overlap(LayoutSolver* solver, Component* comp, int x, int y);
 int has_horizontal_overlap(int x1, int w1, int x2, int w2);
 int has_vertical_overlap(int y1, int h1, int y2, int h2);
-int has_character_overlap(LayoutSolver *solver, Component *comp1, int x1, int y1,
-                         Component *comp2, int x2, int y2);
 
 // =============================
 // CONSTRAINT VALIDATION
@@ -254,7 +222,6 @@ int solve_adjacent_constraint(LayoutSolver* solver, DSLConstraint* constraint,
 // =============================
 void save_solver_state(LayoutSolver* solver, int component_index, int constraint_index, int placement_option);
 int restore_solver_state(LayoutSolver* solver);
-void clear_backtrack_stack(LayoutSolver* solver);
 
 // =============================
 // INTELLIGENT CONFLICT RESOLUTION
@@ -266,19 +233,6 @@ int detect_placement_conflicts(LayoutSolver* solver, Component* target_comp, int
 int attempt_conflict_resolution(LayoutSolver* solver, Component* target_comp, int x, int y);
 int try_relocate_component(LayoutSolver* solver, int comp_index, Component* target_comp);
 
-// =============================
-// SLIDING PUZZLE CONFLICT RESOLUTION
-// =============================
-int attempt_sliding_resolution(LayoutSolver* solver, Component* target_comp, int x, int y);
-int find_sliding_chains(LayoutSolver* solver, Component* target_comp, int x, int y, SlideChain* chains, int* chain_count);
-int validate_slide_chain(LayoutSolver* solver, SlideChain* chain);
-int execute_slide_chain(LayoutSolver* solver, SlideChain* chain);
-int can_component_slide(LayoutSolver* solver, int comp_index, Direction dir, int* max_distance);
-int calculate_slide_move(LayoutSolver* solver, int comp_index, Direction dir, int distance, SlideMove* move);
-int check_constraint_preservation(LayoutSolver* solver, SlideChain* chain);
-void rollback_slide_chain(LayoutSolver* solver, SlideChain* chain);
-int find_directional_slide_chain(LayoutSolver* solver, int comp_index, Direction push_dir, SlideChain* chain);
-int component_mobility_score(LayoutSolver* solver, int comp_index);
 
 // Legacy recursive solver functions removed
 

@@ -17,20 +17,43 @@ if ! pkg-config --exists libcjson; then
     exit 1
 fi
 
-# Compile the system
-echo "Compiling modular ASCII structure system..."
-gcc -o ascii_structure_system main.c constraint_solver.c llm_integration.c \
+echo ""
+echo "Building all system components..."
+echo "================================="
+
+# 1. Build main ASCII structure system
+echo "1. Compiling main ASCII structure system..."
+gcc -o ascii_structure_system main.c constraint_solver.c \
+    constraints.c tree_debug.c llm_integration.c \
     $(pkg-config --cflags --libs libcurl libcjson) \
     -lm -Wall -Wextra
 
-if [ $? -eq 0 ]; then
-    echo "✅ Build successful!"
-    echo "Files compiled: main.c, constraint_solver.c, llm_integration.c"
-    echo "Run with: ./ascii_structure_system"
-    echo ""
-    echo "Make sure to set your OpenAI API key:"
-    echo "export OPENAI_API_KEY='your-api-key-here'"
-else
-    echo "❌ Build failed!"
+if [ $? -ne 0 ]; then
+    echo "❌ Main system build failed!"
     exit 1
 fi
+
+# 2. Build constraint testing system
+echo "2. Compiling constraint testing system..."
+gcc -o constraint_test constraint_test.c constraint_solver.c constraints.c tree_debug.c \
+    -lm -Wall -Wextra
+
+if [ $? -ne 0 ]; then
+    echo "❌ Constraint test system build failed!"
+    exit 1
+fi
+
+
+echo ""
+echo "✅ All builds successful!"
+echo "========================="
+echo "Built components:"
+echo "  • ascii_structure_system  - Main constraint solver system"
+echo "  • constraint_test         - Constraint testing and visualization"
+echo ""
+echo "Usage:"
+echo "  ./ascii_structure_system  - Run main system (requires OpenAI API key)"
+echo "  ./constraint_test         - Test individual constraints interactively"
+echo ""
+echo "For main system, set your OpenAI API key:"
+echo "export OPENAI_API_KEY='your-api-key-here'"
