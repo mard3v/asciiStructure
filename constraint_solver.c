@@ -137,6 +137,219 @@ Component *find_component(LayoutSolver *solver, const char *name) {
 }
 
 /**
+ * @brief Check if a component placement is valid at given coordinates
+ *
+ * Validates placement by checking:
+ * - Grid bounds (components must fit within grid)
+ * - No character overlap with existing placed components
+ * - Basic spatial constraints
+ *
+ * @param solver The layout solver instance
+ * @param comp   The component to place
+ * @param x      X coordinate for placement
+ * @param y      Y coordinate for placement
+ * @return       1 if placement is valid, 0 if invalid
+ */
+int is_placement_valid(LayoutSolver* solver, Component* comp, int x, int y) {
+    if (!comp) return 0;
+
+    // Expand grid if needed
+    expand_grid_for_component(solver, comp, x, y);
+
+    // Check for overlap with other placed components
+    for (int i = 0; i < solver->component_count; i++) {
+        Component* other = &solver->components[i];
+        if (other == comp || !other->is_placed) continue;
+
+        if (has_character_overlap(solver, comp, x, y, other, other->placed_x, other->placed_y)) {
+            return 0; // Overlap detected
+        }
+    }
+
+    return 1; // Placement is valid
+}
+
+/**
+ * @brief Place a component at specified coordinates
+ *
+ * Places the component on the grid, updating:
+ * - Component placement status and coordinates
+ * - Grid character data
+ * - Grid bounds if necessary
+ *
+ * @param solver The layout solver instance
+ * @param comp   The component to place
+ * @param x      X coordinate for placement
+ * @param y      Y coordinate for placement
+ */
+void place_component(LayoutSolver* solver, Component* comp, int x, int y) {
+    if (!comp) return;
+
+    // Expand grid if needed
+    expand_grid_for_component(solver, comp, x, y);
+
+    // Update component state
+    comp->is_placed = 1;
+    comp->placed_x = x;
+    comp->placed_y = y;
+
+    // Place component tiles on grid
+    for (int dy = 0; dy < comp->height; dy++) {
+        for (int dx = 0; dx < comp->width; dx++) {
+            int grid_x = x + dx;
+            int grid_y = y + dy;
+
+            if (grid_x >= 0 && grid_x < MAX_GRID_SIZE &&
+                grid_y >= 0 && grid_y < MAX_GRID_SIZE) {
+                char tile_char = comp->ascii_tile[dy][dx];
+                if (tile_char != ' ') { // Only place non-space characters
+                    solver->grid[grid_y][grid_x] = tile_char;
+                }
+            }
+        }
+    }
+
+    printf("  ✅ Placed %s at (%d,%d)\n", comp->name, x, y);
+}
+
+/**
+ * @brief Remove a component from the grid
+ *
+ * Removes component from grid, updating:
+ * - Component placement status
+ * - Grid character data (restores to spaces)
+ * - Does NOT update grid bounds (leaves them expanded)
+ *
+ * @param solver The layout solver instance
+ * @param comp   The component to remove
+ */
+void remove_component(LayoutSolver* solver, Component* comp) {
+    if (!comp || !comp->is_placed) return;
+
+    // Remove component tiles from grid (restore to spaces)
+    for (int dy = 0; dy < comp->height; dy++) {
+        for (int dx = 0; dx < comp->width; dx++) {
+            int grid_x = comp->placed_x + dx;
+            int grid_y = comp->placed_y + dy;
+
+            if (grid_x >= 0 && grid_x < MAX_GRID_SIZE &&
+                grid_y >= 0 && grid_y < MAX_GRID_SIZE) {
+                char tile_char = comp->ascii_tile[dy][dx];
+                if (tile_char != ' ') { // Only remove non-space characters
+                    solver->grid[grid_y][grid_x] = ' ';
+                }
+            }
+        }
+    }
+
+    // Update component state
+    comp->is_placed = 0;
+    comp->placed_x = -1;
+    comp->placed_y = -1;
+
+    printf("  🗑️  Removed %s from grid\n", comp->name);
+}
+
+/**
+ * @brief Check if a constraint is satisfied between two components
+ *
+ * Validates that the spatial relationship between two placed components
+ * matches the specified constraint (e.g., ADJACENT with direction).
+ *
+ * @param solver     The layout solver instance
+ * @param constraint The constraint to check
+ * @param comp1      First component
+ * @param comp2      Second component
+ * @param test_x     X coordinate to test (for comp1)
+ * @param test_y     Y coordinate to test (for comp1)
+ * @return           1 if constraint is satisfied, 0 if not
+ */
+int check_constraint_satisfied(LayoutSolver* solver, DSLConstraint* constraint,
+                             Component* comp1, Component* comp2, int test_x, int test_y) {
+    if (!constraint || !comp1 || !comp2) return 0;
+    if (!comp1->is_placed || !comp2->is_placed) return 0;
+
+    // Determine which component is which in the constraint
+    int comp1_is_a = (strcmp(constraint->component_a, comp1->name) == 0);
+
+    if (constraint->type == DSL_ADJACENT) {
+        if (comp1_is_a) {
+            return check_adjacent(test_x, test_y, comp1->width, comp1->height,
+                                comp2->placed_x, comp2->placed_y, comp2->width, comp2->height,
+                                constraint->direction);
+        } else {
+            return check_adjacent(comp2->placed_x, comp2->placed_y, comp2->width, comp2->height,
+                                test_x, test_y, comp1->width, comp1->height,
+                                constraint->direction);
+        }
+    }
+
+    return 0; // Unknown constraint type
+}
+
+/**
+ * @brief Check if two components are adjacent in a specific direction
+ *
+ * Validates that two rectangular components are adjacent according to
+ * the specified direction constraint.
+ *
+ * @param x1     X coordinate of first component
+ * @param y1     Y coordinate of first component
+ * @param w1     Width of first component
+ * @param h1     Height of first component
+ * @param x2     X coordinate of second component
+ * @param y2     Y coordinate of second component
+ * @param w2     Width of second component
+ * @param h2     Height of second component
+ * @param dir    Direction of adjacency ('n', 's', 'e', 'w', 'a')
+ * @return       1 if adjacent in specified direction, 0 if not
+ */
+int check_adjacent(int x1, int y1, int w1, int h1, int x2, int y2, int w2, int h2, Direction dir) {
+    switch (dir) {
+    case 'n': // Component 1 is north of component 2
+        // Component 1's bottom edge should touch component 2's top edge
+        if (y1 + h1 == y2) {
+            // Check horizontal overlap
+            return (x1 < x2 + w2) && (x1 + w1 > x2);
+        }
+        return 0;
+
+    case 's': // Component 1 is south of component 2
+        // Component 1's top edge should touch component 2's bottom edge
+        if (y1 == y2 + h2) {
+            // Check horizontal overlap
+            return (x1 < x2 + w2) && (x1 + w1 > x2);
+        }
+        return 0;
+
+    case 'e': // Component 1 is east of component 2
+        // Component 1's left edge should touch component 2's right edge
+        if (x1 == x2 + w2) {
+            // Check vertical overlap
+            return (y1 < y2 + h2) && (y1 + h1 > y2);
+        }
+        return 0;
+
+    case 'w': // Component 1 is west of component 2
+        // Component 1's right edge should touch component 2's left edge
+        if (x1 + w1 == x2) {
+            // Check vertical overlap
+            return (y1 < y2 + h2) && (y1 + h1 > y2);
+        }
+        return 0;
+
+    case 'a': // Any direction - check all four directions
+        return check_adjacent(x1, y1, w1, h1, x2, y2, w2, h2, 'n') ||
+               check_adjacent(x1, y1, w1, h1, x2, y2, w2, h2, 's') ||
+               check_adjacent(x1, y1, w1, h1, x2, y2, w2, h2, 'e') ||
+               check_adjacent(x1, y1, w1, h1, x2, y2, w2, h2, 'w');
+
+    default:
+        return 0;
+    }
+}
+
+/**
  * @brief Builds adjacency matrix representing constraint relationships
  * 
  * Creates a bidirectional constraint graph where graph[i][j] = 1 indicates
@@ -654,6 +867,12 @@ void init_solver(LayoutSolver *solver, int width, int height) {
   // Initialize backtracking stack
   clear_backtrack_stack(solver);
 
+  // Initialize sliding puzzle statistics
+  solver->slide_stats.active_chains = 0;
+  solver->slide_stats.chain_attempts = 0;
+  solver->slide_stats.successful_slides = 0;
+  solver->slide_stats.max_chain_length = 0;
+
   // Initialize grid with empty spaces
   for (int i = 0; i < MAX_GRID_SIZE; i++) {
     for (int j = 0; j < MAX_GRID_SIZE; j++) {
@@ -1020,6 +1239,9 @@ int solve_constraints(LayoutSolver *solver) {
     case SOLVER_RECURSIVE_TREE:
       printf("🌳 Using recursive search tree with backtracking\n");
       return solve_recursive_tree(solver);
+    case SOLVER_TREE_CONSTRAINT:
+      printf("🌲 Using tree-based constraint resolution with conflict-depth backtracking\n");
+      return solve_tree_constraint(solver);
     default:
       printf("❌ Unknown solver type: %d\n", solver->solver_type);
       return 0;
@@ -1338,55 +1560,86 @@ int try_placement_options(LayoutSolver* solver, Component* comp, int depth) {
                 option_count, comp->name);
     }
 
-    // Try each placement option (branch)
+    // Sort options to prioritize non-overlapping placements
+    PlacementOption sorted_options[MAX_CONSTRAINTS * 10];
+    int non_overlap_count = 0;
+    int overlap_count = 0;
+
+    // First pass: collect non-overlapping options
     for (int i = 0; i < option_count; i++) {
+        expand_grid_for_component(solver, comp, options[i].x, options[i].y);
+        if (!has_overlap(solver, comp, options[i].x, options[i].y)) {
+            sorted_options[non_overlap_count++] = options[i];
+        }
+    }
+
+    // Second pass: collect overlapping options
+    for (int i = 0; i < option_count; i++) {
+        expand_grid_for_component(solver, comp, options[i].x, options[i].y);
+        if (has_overlap(solver, comp, options[i].x, options[i].y)) {
+            sorted_options[non_overlap_count + overlap_count] = options[i];
+            overlap_count++;
+        }
+    }
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "🔄 Reordered %d options: %d non-overlapping first, then %d overlapping\n",
+                option_count, non_overlap_count, overlap_count);
+    }
+
+    // Try each placement option (now prioritized: non-overlapping first)
+    for (int i = 0; i < option_count; i++) {
+        PlacementOption* option = &sorted_options[i];
+        int is_overlapping = (i >= non_overlap_count);
+
         if (solver->debug_file) {
-            fprintf(solver->debug_file, "🌱 BRANCH %d/%d: trying placement at (%d,%d)\n",
-                    i + 1, option_count, options[i].x, options[i].y);
+            fprintf(solver->debug_file, "🌱 BRANCH %d/%d: trying %s placement at (%d,%d)\n",
+                    i + 1, option_count, is_overlapping ? "OVERLAPPING" : "NON-OVERLAPPING",
+                    option->x, option->y);
         }
 
         // Save current state before trying this branch
         save_solver_state(solver, comp - solver->components, i, i);
 
         // Log detailed placement attempt
-        debug_log_placement_attempt(solver, comp, options[i].other_comp, options[i].dir,
-                                   options[i].x, options[i].y, 0);
+        debug_log_placement_attempt(solver, comp, option->other_comp, option->dir,
+                                   option->x, option->y, 0);
 
         // Try this placement
-        expand_grid_for_component(solver, comp, options[i].x, options[i].y);
+        expand_grid_for_component(solver, comp, option->x, option->y);
 
-        if (!has_overlap(solver, comp, options[i].x, options[i].y)) {
+        if (!has_overlap(solver, comp, option->x, option->y)) {
             // Check constraint satisfaction
             int satisfies = 0;
-            if ((options[i].dir == 'n' || options[i].dir == 's') &&
-                has_horizontal_overlap(options[i].x, comp->width,
-                                     options[i].other_comp->placed_x,
-                                     options[i].other_comp->width)) {
+            if ((option->dir == 'n' || option->dir == 's') &&
+                has_horizontal_overlap(option->x, comp->width,
+                                     option->other_comp->placed_x,
+                                     option->other_comp->width)) {
                 satisfies = 1;
-            } else if ((options[i].dir == 'e' || options[i].dir == 'w') &&
-                       has_vertical_overlap(options[i].y, comp->height,
-                                          options[i].other_comp->placed_y,
-                                          options[i].other_comp->height)) {
+            } else if ((option->dir == 'e' || option->dir == 'w') &&
+                       has_vertical_overlap(option->y, comp->height,
+                                          option->other_comp->placed_y,
+                                          option->other_comp->height)) {
                 satisfies = 1;
             }
 
             if (satisfies) {
                 // Valid placement - place component and update grid
-                comp->placed_x = options[i].x;
-                comp->placed_y = options[i].y;
+                comp->placed_x = option->x;
+                comp->placed_y = option->y;
                 comp->is_placed = 1;
-                comp->group_id = options[i].other_comp->group_id;
+                comp->group_id = option->other_comp->group_id;
 
                 // Log successful placement
-                debug_log_placement_attempt(solver, comp, options[i].other_comp, options[i].dir,
-                                           options[i].x, options[i].y, 1);
+                debug_log_placement_attempt(solver, comp, option->other_comp, option->dir,
+                                           option->x, option->y, 1);
 
                 // Update grid
                 for (int row = 0; row < comp->height; row++) {
                     for (int col = 0; col < comp->width; col++) {
                         if (comp->ascii_tile[row][col] != ' ') {
-                            int grid_x = options[i].x + col - solver->grid_min_x;
-                            int grid_y = options[i].y + row - solver->grid_min_y;
+                            int grid_x = option->x + col - solver->grid_min_x;
+                            int grid_y = option->y + row - solver->grid_min_y;
                             if (grid_x >= 0 && grid_x < solver->grid_width &&
                                 grid_y >= 0 && grid_y < solver->grid_height) {
                                 solver->grid[grid_y][grid_x] = comp->ascii_tile[row][col];
@@ -1397,7 +1650,7 @@ int try_placement_options(LayoutSolver* solver, Component* comp, int depth) {
 
                 if (solver->debug_file) {
                     fprintf(solver->debug_file, "✅ PLACED '%s' at (%d,%d) - exploring subtree\n",
-                            comp->name, options[i].x, options[i].y);
+                            comp->name, option->x, option->y);
                 }
 
                 // Log grid state after placement
@@ -1416,31 +1669,49 @@ int try_placement_options(LayoutSolver* solver, Component* comp, int depth) {
                 // Constraint not satisfied
                 if (solver->debug_file) {
                     fprintf(solver->debug_file, "❌ FAILED: constraint not satisfied (%c direction)\n",
-                            options[i].dir);
+                            option->dir);
                 }
             }
         } else {
             // Overlap detected - try intelligent conflict resolution
             if (solver->debug_file) {
                 fprintf(solver->debug_file, "⚠️  OVERLAP detected at (%d,%d) - attempting intelligent resolution\n",
-                        options[i].x, options[i].y);
+                        option->x, option->y);
             }
 
             // Phase 1: Detect specific conflicting components
-            int conflicts = detect_placement_conflicts(solver, comp, options[i].x, options[i].y);
+            int conflicts = detect_placement_conflicts(solver, comp, option->x, option->y);
 
             if (conflicts > 0) {
-                // Phase 2: Attempt targeted conflict resolution
-                if (attempt_conflict_resolution(solver, comp, options[i].x, options[i].y)) {
+                // Phase 2: Try sliding puzzle resolution first, fallback to basic resolution
+                int resolution_success = 0;
+
+                // Try advanced sliding puzzle approach
+                if (attempt_sliding_resolution(solver, comp, option->x, option->y)) {
+                    resolution_success = 1;
+                    if (solver->debug_file) {
+                        fprintf(solver->debug_file, "🧩 SLIDING RESOLUTION SUCCESS!\n");
+                    }
+                } else {
+                    // Fallback to basic conflict resolution
+                    if (attempt_conflict_resolution(solver, comp, option->x, option->y)) {
+                        resolution_success = 1;
+                        if (solver->debug_file) {
+                            fprintf(solver->debug_file, "🔧 BASIC RESOLUTION SUCCESS!\n");
+                        }
+                    }
+                }
+
+                if (resolution_success) {
                     if (solver->debug_file) {
                         fprintf(solver->debug_file, "🎯 CONFLICT RESOLVED! Retrying placement at (%d,%d)\n",
-                                options[i].x, options[i].y);
+                                option->x, option->y);
                     }
 
                     // Retry the placement after resolution
-                    expand_grid_for_component(solver, comp, options[i].x, options[i].y);
+                    expand_grid_for_component(solver, comp, option->x, option->y);
 
-                    if (!has_overlap(solver, comp, options[i].x, options[i].y)) {
+                    if (!has_overlap(solver, comp, option->x, option->y)) {
                         // Check constraint satisfaction again
                         int satisfies = 0;
                         if ((options[i].dir == 'n' || options[i].dir == 's') &&
@@ -2236,3 +2507,1095 @@ int try_relocate_component(LayoutSolver* solver, int comp_index, Component* targ
 
     return 0;
 }
+
+// =============================================================================
+// SLIDING PUZZLE CONFLICT RESOLUTION IMPLEMENTATION
+// =============================================================================
+
+/**
+ * @brief Attempts to resolve conflicts using sliding puzzle approach
+ */
+int attempt_sliding_resolution(LayoutSolver* solver, Component* target_comp, int x, int y) {
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "🧩 SLIDING PUZZLE: Attempting resolution for '%s' at (%d,%d)\n",
+                target_comp->name, x, y);
+    }
+
+    solver->slide_stats.chain_attempts++;
+
+    SlideChain chains[MAX_SLIDE_CHAINS];
+    int chain_count = 0;
+
+    if (!find_sliding_chains(solver, target_comp, x, y, chains, &chain_count)) {
+        if (solver->debug_file) {
+            fprintf(solver->debug_file, "❌ No valid sliding chains found\n");
+        }
+        return 0;
+    }
+
+    for (int i = 0; i < chain_count; i++) {
+        SlideChain* chain = &chains[i];
+
+        if (solver->debug_file) {
+            fprintf(solver->debug_file, "🔗 Trying slide chain %d/%d (length: %d, displacement: %d)\n",
+                    i+1, chain_count, chain->chain_length, chain->total_displacement);
+        }
+
+        if (!validate_slide_chain(solver, chain)) {
+            continue;
+        }
+
+        if (execute_slide_chain(solver, chain)) {
+            solver->slide_stats.successful_slides++;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Finds all possible sliding chains to resolve conflicts
+ */
+int find_sliding_chains(LayoutSolver* solver, Component* target_comp, int x, int y,
+                       SlideChain* chains, int* chain_count) {
+    *chain_count = 0;
+
+    int conflicting_components[MAX_COMPONENTS];
+    int conflict_count = 0;
+
+    // Store the intended target position in conflict state for sliding calculations
+    solver->conflict_state.target_component = target_comp - solver->components;
+
+    for (int i = 0; i < solver->component_count; i++) {
+        Component* comp = &solver->components[i];
+        if (!comp->is_placed || comp == target_comp) continue;
+
+        if (has_character_overlap(solver, target_comp, x, y, comp, comp->placed_x, comp->placed_y)) {
+            conflicting_components[conflict_count++] = i;
+        }
+    }
+
+    if (conflict_count == 0) return 1;
+
+    // Store target position for sliding calculations
+    int target_x = x, target_y = y;
+
+    for (int i = 0; i < conflict_count && *chain_count < MAX_SLIDE_CHAINS; i++) {
+        int comp_idx = conflicting_components[i];
+        Component* conflicting_comp = &solver->components[comp_idx];
+
+        // Smart direction selection - prioritize directions that would resolve the conflict
+        Direction smart_directions[4];
+        int dir_count = 0;
+
+        // Calculate which directions would help clear the conflict area
+        if (conflicting_comp->placed_x < target_x + target_comp->width) {
+            smart_directions[dir_count++] = 'w';  // Move west (left) to clear
+        }
+        if (conflicting_comp->placed_x + conflicting_comp->width > target_x) {
+            smart_directions[dir_count++] = 'e';  // Move east (right) to clear
+        }
+        if (conflicting_comp->placed_y < target_y + target_comp->height) {
+            smart_directions[dir_count++] = 'n';  // Move north (up) to clear
+        }
+        if (conflicting_comp->placed_y + conflicting_comp->height > target_y) {
+            smart_directions[dir_count++] = 's';  // Move south (down) to clear
+        }
+
+        // If no smart directions found, use all directions as fallback
+        if (dir_count == 0) {
+            smart_directions[0] = 'n'; smart_directions[1] = 's';
+            smart_directions[2] = 'e'; smart_directions[3] = 'w';
+            dir_count = 4;
+        }
+
+        if (solver->debug_file) {
+            fprintf(solver->debug_file, "  🧠 Smart directions for %s: %d options (",
+                    conflicting_comp->name, dir_count);
+            for (int d = 0; d < dir_count; d++) {
+                fprintf(solver->debug_file, "%c", smart_directions[d]);
+                if (d < dir_count - 1) fprintf(solver->debug_file, ",");
+            }
+            fprintf(solver->debug_file, ")\n");
+        }
+
+        for (int d = 0; d < dir_count && *chain_count < MAX_SLIDE_CHAINS; d++) {
+            SlideChain* chain = &chains[*chain_count];
+
+            // Pass target position to chain finder
+            chain->target_x = target_x;
+            chain->target_y = target_y;
+
+            if (find_directional_slide_chain(solver, comp_idx, smart_directions[d], chain)) {
+                (*chain_count)++;
+            }
+        }
+    }
+
+    return *chain_count > 0;
+}
+
+/**
+ * @brief Helper functions for sliding implementation
+ */
+int find_directional_slide_chain(LayoutSolver* solver, int start_comp_idx, Direction push_dir, SlideChain* chain) {
+    chain->chain_length = 0;
+    chain->total_displacement = 0;
+
+    Component* start_comp = &solver->components[start_comp_idx];
+
+    // Calculate the minimum distance needed to clear the conflict
+    // We need to move far enough that there's no overlap with the target position
+    int slide_distance = 0;
+
+    // Find the target component that wants to be placed (from conflict state)
+    Component* target_comp = NULL;
+    if (solver->conflict_state.target_component >= 0 &&
+        solver->conflict_state.target_component < solver->component_count) {
+        target_comp = &solver->components[solver->conflict_state.target_component];
+    }
+
+    if (target_comp && chain->target_x != 0 && chain->target_y != 0) {
+        // Calculate slide distance based on clearing the target's intended position
+        switch (push_dir) {
+            case 'n':
+                // Move far enough north to not overlap with target
+                slide_distance = (start_comp->placed_y + start_comp->height) - chain->target_y + 2;
+                break;
+            case 's':
+                // Move far enough south to not overlap with target
+                slide_distance = (chain->target_y + target_comp->height) - start_comp->placed_y + 2;
+                break;
+            case 'e':
+                // Move far enough east to not overlap with target
+                slide_distance = (chain->target_x + target_comp->width) - start_comp->placed_x + 2;
+                break;
+            case 'w':
+                // Move far enough west to not overlap with target
+                slide_distance = (start_comp->placed_x + start_comp->width) - chain->target_x + 2;
+                break;
+        }
+
+        // Ensure positive distance and reasonable bounds
+        if (slide_distance <= 0) slide_distance = start_comp->width + start_comp->height + 3;
+        if (slide_distance > MAX_SLIDE_DISTANCE) slide_distance = MAX_SLIDE_DISTANCE;
+    } else {
+        // Fallback to simple distance
+        slide_distance = (push_dir == 'n' || push_dir == 's') ? start_comp->height + 3 : start_comp->width + 3;
+    }
+
+    SlideMove* move = &chain->moves[0];
+    move->component_index = start_comp_idx;
+    move->direction = push_dir;
+    move->distance = slide_distance;
+
+    switch (push_dir) {
+        case 'n': move->new_x = start_comp->placed_x; move->new_y = start_comp->placed_y - slide_distance; break;
+        case 's': move->new_x = start_comp->placed_x; move->new_y = start_comp->placed_y + slide_distance; break;
+        case 'e': move->new_x = start_comp->placed_x + slide_distance; move->new_y = start_comp->placed_y; break;
+        case 'w': move->new_x = start_comp->placed_x - slide_distance; move->new_y = start_comp->placed_y; break;
+    }
+
+    chain->chain_length = 1;
+    chain->total_displacement = slide_distance;
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "  📐 Calculated slide distance: %d for %s moving %c\n",
+                slide_distance, start_comp->name, push_dir);
+    }
+
+    return 1;
+}
+
+int can_component_slide(LayoutSolver* solver, int comp_index, Direction dir, int* max_distance) {
+    *max_distance = MAX_SLIDE_DISTANCE;
+    return 1; // For now, assume all components can slide
+}
+
+int calculate_slide_move(LayoutSolver* solver, int comp_index, Direction dir, int distance, SlideMove* move) {
+    Component* comp = &solver->components[comp_index];
+
+    move->component_index = comp_index;
+    move->direction = dir;
+    move->distance = distance;
+
+    switch (dir) {
+        case 'n': move->new_x = comp->placed_x; move->new_y = comp->placed_y - distance; break;
+        case 's': move->new_x = comp->placed_x; move->new_y = comp->placed_y + distance; break;
+        case 'e': move->new_x = comp->placed_x + distance; move->new_y = comp->placed_y; break;
+        case 'w': move->new_x = comp->placed_x - distance; move->new_y = comp->placed_y; break;
+        default: return 0;
+    }
+
+    return 1;
+}
+
+int validate_slide_chain(LayoutSolver* solver, SlideChain* chain) {
+    // Basic validation - check for grid bounds
+    for (int i = 0; i < chain->chain_length; i++) {
+        SlideMove* move = &chain->moves[i];
+        if (move->new_x < -50 || move->new_y < -50 ||
+            move->new_x > MAX_GRID_SIZE - 50 || move->new_y > MAX_GRID_SIZE - 50) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int execute_slide_chain(LayoutSolver* solver, SlideChain* chain) {
+    // Save original positions for rollback
+    int original_positions[MAX_CHAIN_LENGTH][2];
+
+    for (int i = 0; i < chain->chain_length; i++) {
+        SlideMove* move = &chain->moves[i];
+        Component* comp = &solver->components[move->component_index];
+
+        original_positions[i][0] = comp->placed_x;
+        original_positions[i][1] = comp->placed_y;
+
+        comp->placed_x = move->new_x;
+        comp->placed_y = move->new_y;
+    }
+
+    // Check for overlaps: only between moved components and non-moved components
+    for (int i = 0; i < chain->chain_length; i++) {
+        SlideMove* moved_component = &chain->moves[i];
+        Component* comp1 = &solver->components[moved_component->component_index];
+
+        // Check this moved component against all non-moved placed components
+        for (int j = 0; j < solver->component_count; j++) {
+            Component* comp2 = &solver->components[j];
+
+            if (!comp2->is_placed) continue; // Skip unplaced components
+
+            // Skip if comp2 is also in the slide chain (moved component)
+            int comp2_was_moved = 0;
+            for (int k = 0; k < chain->chain_length; k++) {
+                if (chain->moves[k].component_index == j) {
+                    comp2_was_moved = 1;
+                    break;
+                }
+            }
+            if (comp2_was_moved) continue;
+
+            // Check for overlap between moved component and stationary component
+            if (has_character_overlap(solver, comp1, comp1->placed_x, comp1->placed_y,
+                                    comp2, comp2->placed_x, comp2->placed_y)) {
+                if (solver->debug_file) {
+                    fprintf(solver->debug_file, "  ❌ Slide collision: %s at (%d,%d) vs %s at (%d,%d)\n",
+                            comp1->name, comp1->placed_x, comp1->placed_y,
+                            comp2->name, comp2->placed_x, comp2->placed_y);
+                }
+
+                // Rollback
+                for (int k = 0; k < chain->chain_length; k++) {
+                    SlideMove* move = &chain->moves[k];
+                    Component* comp = &solver->components[move->component_index];
+                    comp->placed_x = original_positions[k][0];
+                    comp->placed_y = original_positions[k][1];
+                }
+                return 0;
+            }
+        }
+    }
+
+    if (solver->debug_file) {
+        fprintf(solver->debug_file, "  ✅ Slide executed successfully - no collisions detected\n");
+    }
+
+    return 1;
+}
+
+int component_mobility_score(LayoutSolver* solver, int comp_index) {
+    // Simple mobility score based on constraint count
+    int constraint_count = 0;
+    for (int i = 0; i < solver->constraint_count; i++) {
+        DSLConstraint* constraint = &solver->constraints[i];
+        if (strcmp(constraint->component_a, solver->components[comp_index].name) == 0 ||
+            strcmp(constraint->component_b, solver->components[comp_index].name) == 0) {
+            constraint_count++;
+        }
+    }
+    return 10 - constraint_count; // Higher score = more mobile
+}
+
+int check_constraint_preservation(LayoutSolver* solver, SlideChain* chain) {
+    // For now, assume constraints are preserved
+    return 1;
+}
+
+void rollback_slide_chain(LayoutSolver* solver, SlideChain* chain) {
+    // Implementation would restore original positions
+}
+
+// =============================================================================
+// TREE-BASED CONSTRAINT SOLVER IMPLEMENTATION
+// =============================================================================
+
+/**
+ * @brief Main entry point for tree-based constraint resolution
+ *
+ * Implements the tree-based approach where we:
+ * 1. Place the most constrained component at root
+ * 2. Generate all placement options for each constraint in order
+ * 3. Order options by conflict status then preference score
+ * 4. Use conflict-depth-based intelligent backtracking
+ */
+int solve_tree_constraint(LayoutSolver* solver) {
+    printf("🌲 Starting tree-based constraint resolution\n");
+
+    // Initialize debug logging
+    init_tree_debug_file(solver);
+
+    // Initialize the tree solver
+    init_tree_solver(solver);
+
+    // Step 1: Place the most constrained component (root)
+    Component* root_comp = find_most_constrained_unplaced(solver);
+    if (!root_comp) {
+        printf("❌ No components to place\n");
+        cleanup_tree_solver(solver);
+        return 0;
+    }
+
+    printf("📍 Root component: %s\n", root_comp->name);
+
+    // Place root component at origin (expand grid as needed)
+    int root_x = 50, root_y = 50; // Center of grid
+    place_component(solver, root_comp, root_x, root_y);
+
+    // Create root node
+    int root_comp_index = root_comp - solver->components;
+    solver->tree_solver.root = create_tree_node(root_comp, NULL, root_x, root_y, 0, root_comp_index);
+    solver->tree_solver.current_node = solver->tree_solver.root;
+
+    // Log initial grid state
+    debug_log_tree_grid_state(solver, "ROOT PLACEMENT");
+
+    // Step 2: Process constraints in order
+    int result = advance_to_next_constraint(solver);
+
+    // Log final results
+    if (result) {
+        debug_log_tree_solution_path(solver);
+        debug_log_tree_grid_state(solver, "FINAL SOLUTION");
+    }
+
+    cleanup_tree_solver(solver);
+    close_tree_debug_file(solver);
+    return result;
+}
+
+/**
+ * @brief Initialize the tree solver state
+ */
+void init_tree_solver(LayoutSolver* solver) {
+    TreeSolver* ts = &solver->tree_solver;
+    memset(ts, 0, sizeof(TreeSolver));
+
+    // Copy all constraints to remaining list
+    for (int i = 0; i < solver->constraint_count; i++) {
+        ts->remaining_constraints[i] = &solver->constraints[i];
+    }
+    ts->remaining_count = solver->constraint_count;
+    ts->current_constraint = NULL;
+}
+
+/**
+ * @brief Clean up tree solver resources
+ */
+void cleanup_tree_solver(LayoutSolver* solver) {
+    TreeSolver* ts = &solver->tree_solver;
+
+    if (ts->root) {
+        free_tree_node(ts->root);
+        ts->root = NULL;
+    }
+
+    printf("📊 Tree solver stats: %d nodes, %d backtracks, %d conflict backtracks\n",
+           ts->nodes_created, ts->backtracks_performed, ts->conflict_backtracks);
+}
+
+/**
+ * @brief Create a new tree node
+ */
+TreeNode* create_tree_node(Component* comp, DSLConstraint* constraint, int x, int y, int depth, int comp_index) {
+    TreeNode* node = malloc(sizeof(TreeNode));
+    if (!node) return NULL;
+
+    memset(node, 0, sizeof(TreeNode));
+    node->component = comp;
+    node->constraint = constraint;
+    node->x = x;
+    node->y = y;
+    node->depth = depth;
+    node->component_index = comp_index;
+
+    return node;
+}
+
+/**
+ * @brief Free a tree node and all its children
+ */
+void free_tree_node(TreeNode* node) {
+    if (!node) return;
+
+    for (int i = 0; i < node->child_count; i++) {
+        free_tree_node(node->children[i]);
+    }
+    free(node);
+}
+
+/**
+ * @brief Advance to the next constraint and generate placement options
+ */
+int advance_to_next_constraint(LayoutSolver* solver) {
+    TreeSolver* ts = &solver->tree_solver;
+
+    // Find next constraint involving already placed components
+    DSLConstraint* next_constraint = get_next_constraint_involving_placed(solver);
+    if (!next_constraint) {
+        printf("✅ All constraints resolved successfully\n");
+        return 1; // Success - all constraints satisfied
+    }
+
+    ts->current_constraint = next_constraint;
+    printf("🎯 Processing constraint: %s %s %s %c\n",
+           next_constraint->component_a, "ADJACENT", next_constraint->component_b, next_constraint->direction);
+
+    // Determine which component needs to be placed
+    Component* comp_a = find_component(solver, next_constraint->component_a);
+    Component* comp_b = find_component(solver, next_constraint->component_b);
+
+    Component* unplaced_comp = NULL;
+    if (comp_a && !comp_a->is_placed) {
+        unplaced_comp = comp_a;
+    } else if (comp_b && !comp_b->is_placed) {
+        unplaced_comp = comp_b;
+    }
+
+    if (!unplaced_comp) {
+        // Both components already placed, just validate constraint
+        if (check_constraint_satisfied(solver, next_constraint, comp_a, comp_b, comp_a->placed_x, comp_a->placed_y)) {
+            // Remove this constraint and continue
+            for (int i = 0; i < ts->remaining_count; i++) {
+                if (ts->remaining_constraints[i] == next_constraint) {
+                    // Shift remaining constraints
+                    for (int j = i; j < ts->remaining_count - 1; j++) {
+                        ts->remaining_constraints[j] = ts->remaining_constraints[j + 1];
+                    }
+                    ts->remaining_count--;
+                    break;
+                }
+            }
+            return advance_to_next_constraint(solver);
+        } else {
+            printf("❌ Constraint already violated by existing placements\n");
+            return 0;
+        }
+    }
+
+    // Log constraint start
+    debug_log_tree_constraint_start(solver, next_constraint, unplaced_comp);
+
+    // Generate all placement options for this constraint
+    TreePlacementOption options[200];
+    int option_count = generate_placement_options_for_constraint(solver, next_constraint, unplaced_comp, options);
+
+    if (option_count == 0) {
+        printf("❌ No valid placement options for constraint\n");
+        return 0;
+    }
+
+    printf("📋 Generated %d placement options\n", option_count);
+
+    // Order options by conflict status then preference
+    order_placement_options(options, option_count);
+
+    // Log placement options
+    debug_log_tree_placement_options(solver, options, option_count);
+
+    // Try each option in order
+    for (int i = 0; i < option_count; i++) {
+        TreePlacementOption* option = &options[i];
+
+        printf("🎯 Trying option %d: (%d,%d) conflict=%d score=%d\n",
+               i + 1, option->x, option->y, option->has_conflict, option->preference_score);
+
+        if (option->has_conflict) {
+            printf("⚠️  Option has conflicts - trying anyway\n");
+        }
+
+        // Create child node for this placement
+        int comp_index = unplaced_comp - solver->components;
+        TreeNode* child = create_tree_node(unplaced_comp, next_constraint,
+                                         option->x, option->y,
+                                         ts->current_node->depth + 1, comp_index);
+
+        ts->current_node->children[ts->current_node->child_count++] = child;
+        child->parent = ts->current_node;
+        ts->nodes_created++;
+
+        // Try placing component at this position
+        int placement_success = tree_place_component(solver, child);
+        debug_log_tree_placement_attempt(solver, unplaced_comp, option->x, option->y, i + 1, placement_success);
+
+        if (placement_success) {
+            // Success - move to this node and continue
+            ts->current_node = child;
+            debug_log_tree_node_creation(solver, child);
+
+            // Remove this constraint from remaining
+            for (int j = 0; j < ts->remaining_count; j++) {
+                if (ts->remaining_constraints[j] == next_constraint) {
+                    for (int k = j; k < ts->remaining_count - 1; k++) {
+                        ts->remaining_constraints[k] = ts->remaining_constraints[k + 1];
+                    }
+                    ts->remaining_count--;
+                    break;
+                }
+            }
+
+            // Recursively process next constraint
+            int result = advance_to_next_constraint(solver);
+            if (result) {
+                return 1; // Success
+            }
+
+            // Failed - backtrack
+            remove_component(solver, unplaced_comp);
+            ts->current_node = child->parent;
+        }
+
+        // This option failed, try next
+    }
+
+    // All options failed - need intelligent backtracking
+    printf("❌ All placement options failed for constraint\n");
+
+    // Analyze conflicts for intelligent backtracking
+    TreeNode* backtrack_target = find_conflict_backtrack_target(solver, options, option_count);
+    if (backtrack_target) {
+        printf("🔄 Intelligent backtrack to depth %d\n", backtrack_target->depth);
+        ts->conflict_backtracks++;
+        // TODO: Implement backtracking to specific node
+    }
+
+    return 0; // Failed
+}
+
+/**
+ * @brief Generate all possible placement options for a constraint
+ */
+int generate_placement_options_for_constraint(LayoutSolver* solver, DSLConstraint* constraint,
+                                            Component* unplaced_comp, TreePlacementOption* options) {
+    int option_count = 0;
+
+    // Find the already-placed component in this constraint
+    Component* comp_a = find_component(solver, constraint->component_a);
+    Component* comp_b = find_component(solver, constraint->component_b);
+
+    Component* placed_comp = NULL;
+    if (comp_a && comp_a->is_placed && comp_a != unplaced_comp) {
+        placed_comp = comp_a;
+    } else if (comp_b && comp_b->is_placed && comp_b != unplaced_comp) {
+        placed_comp = comp_b;
+    }
+
+    if (!placed_comp) {
+        printf("❌ No placed component found for constraint\n");
+        return 0;
+    }
+
+    printf("📍 Placed component: %s at (%d,%d)\n", placed_comp->name, placed_comp->placed_x, placed_comp->placed_y);
+
+    // Generate all adjacent positions based on constraint direction
+    Direction dir = constraint->direction;
+    int base_x = placed_comp->placed_x;
+    int base_y = placed_comp->placed_y;
+    int base_w = placed_comp->width;
+    int base_h = placed_comp->height;
+
+    // For each direction, generate multiple placement options
+    if (dir == 'n' || dir == 'a') {
+        // North - place above the placed component
+        int target_y = base_y - unplaced_comp->height;
+
+        // Try different x positions for edge alignment
+        for (int offset = -unplaced_comp->width + 1; offset < base_w; offset++) {
+            int target_x = base_x + offset;
+
+            if (option_count >= 200) break;
+
+            TreePlacementOption* opt = &options[option_count++];
+            opt->x = target_x;
+            opt->y = target_y;
+            opt->preference_score = calculate_preference_score(solver, unplaced_comp, constraint, target_x, target_y);
+
+            // Check for conflicts
+            detect_placement_conflicts_detailed(solver, unplaced_comp, target_x, target_y, &opt->conflicts);
+            opt->has_conflict = (opt->conflicts.conflict_count > 0);
+        }
+    }
+
+    if (dir == 's' || dir == 'a') {
+        // South - place below the placed component
+        int target_y = base_y + base_h;
+
+        for (int offset = -unplaced_comp->width + 1; offset < base_w; offset++) {
+            int target_x = base_x + offset;
+
+            if (option_count >= 200) break;
+
+            TreePlacementOption* opt = &options[option_count++];
+            opt->x = target_x;
+            opt->y = target_y;
+            opt->preference_score = calculate_preference_score(solver, unplaced_comp, constraint, target_x, target_y);
+
+            detect_placement_conflicts_detailed(solver, unplaced_comp, target_x, target_y, &opt->conflicts);
+            opt->has_conflict = (opt->conflicts.conflict_count > 0);
+        }
+    }
+
+    if (dir == 'e' || dir == 'a') {
+        // East - place to the right of placed component
+        int target_x = base_x + base_w;
+
+        for (int offset = -unplaced_comp->height + 1; offset < base_h; offset++) {
+            int target_y = base_y + offset;
+
+            if (option_count >= 200) break;
+
+            TreePlacementOption* opt = &options[option_count++];
+            opt->x = target_x;
+            opt->y = target_y;
+            opt->preference_score = calculate_preference_score(solver, unplaced_comp, constraint, target_x, target_y);
+
+            detect_placement_conflicts_detailed(solver, unplaced_comp, target_x, target_y, &opt->conflicts);
+            opt->has_conflict = (opt->conflicts.conflict_count > 0);
+        }
+    }
+
+    if (dir == 'w' || dir == 'a') {
+        // West - place to the left of placed component
+        int target_x = base_x - unplaced_comp->width;
+
+        for (int offset = -unplaced_comp->height + 1; offset < base_h; offset++) {
+            int target_y = base_y + offset;
+
+            if (option_count >= 200) break;
+
+            TreePlacementOption* opt = &options[option_count++];
+            opt->x = target_x;
+            opt->y = target_y;
+            opt->preference_score = calculate_preference_score(solver, unplaced_comp, constraint, target_x, target_y);
+
+            detect_placement_conflicts_detailed(solver, unplaced_comp, target_x, target_y, &opt->conflicts);
+            opt->has_conflict = (opt->conflicts.conflict_count > 0);
+        }
+    }
+
+    return option_count;
+}
+
+/**
+ * @brief Order placement options by conflict status then preference score
+ */
+void order_placement_options(TreePlacementOption* options, int option_count) {
+    // Simple bubble sort - conflict-free options first, then by preference score
+    for (int i = 0; i < option_count - 1; i++) {
+        for (int j = 0; j < option_count - i - 1; j++) {
+            TreePlacementOption* a = &options[j];
+            TreePlacementOption* b = &options[j + 1];
+
+            // Primary: conflict status (conflict-free first)
+            if (a->has_conflict && !b->has_conflict) {
+                TreePlacementOption temp = *a;
+                *a = *b;
+                *b = temp;
+            }
+            // Secondary: within same conflict status, sort by preference score (higher first)
+            else if (a->has_conflict == b->has_conflict && a->preference_score < b->preference_score) {
+                TreePlacementOption temp = *a;
+                *a = *b;
+                *b = temp;
+            }
+        }
+    }
+}
+
+/**
+ * @brief Calculate preference score for a placement (edge alignment, centering, etc.)
+ */
+int calculate_preference_score(LayoutSolver* solver, Component* comp, DSLConstraint* constraint, int x, int y) {
+    // Find the reference component
+    Component* ref_comp = NULL;
+    if (strcmp(constraint->component_a, comp->name) == 0) {
+        ref_comp = find_component(solver, constraint->component_b);
+    } else {
+        ref_comp = find_component(solver, constraint->component_a);
+    }
+
+    if (!ref_comp || !ref_comp->is_placed) {
+        return 0;
+    }
+
+    int score = 0;
+
+    // Edge alignment bonus
+    if (constraint->direction == 'n' || constraint->direction == 's') {
+        // Horizontal alignment
+        if (x == ref_comp->placed_x) score += 10; // Perfect left edge alignment
+        if (x + comp->width == ref_comp->placed_x + ref_comp->width) score += 10; // Perfect right edge alignment
+
+        // Centered alignment
+        int comp_center = x + comp->width / 2;
+        int ref_center = ref_comp->placed_x + ref_comp->width / 2;
+        if (abs(comp_center - ref_center) <= 1) score += 15; // Centered
+    }
+
+    if (constraint->direction == 'e' || constraint->direction == 'w') {
+        // Vertical alignment
+        if (y == ref_comp->placed_y) score += 10; // Perfect top edge alignment
+        if (y + comp->height == ref_comp->placed_y + ref_comp->height) score += 10; // Perfect bottom edge alignment
+
+        // Centered alignment
+        int comp_center = y + comp->height / 2;
+        int ref_center = ref_comp->placed_y + ref_comp->height / 2;
+        if (abs(comp_center - ref_center) <= 1) score += 15; // Centered
+    }
+
+    return score;
+}
+
+/**
+ * @brief Detect conflicts and record detailed information about conflicting components
+ */
+void detect_placement_conflicts_detailed(LayoutSolver* solver, Component* comp, int x, int y, ConflictInfo* conflicts) {
+    conflicts->conflict_count = 0;
+
+    for (int i = 0; i < solver->component_count; i++) {
+        Component* other = &solver->components[i];
+        if (other == comp || !other->is_placed) continue;
+
+        if (has_character_overlap(solver, comp, x, y, other, other->placed_x, other->placed_y)) {
+            if (conflicts->conflict_count < MAX_COMPONENTS) {
+                conflicts->conflicting_components[conflicts->conflict_count] = i;
+
+                // Find depth of this component (for now, use a simple heuristic)
+                // In a full implementation, we'd track placement order
+                conflicts->conflict_depths[conflicts->conflict_count] = 0; // TODO: Track actual depth
+
+                conflicts->conflict_count++;
+            }
+        }
+    }
+}
+
+/**
+ * @brief Find the best backtrack target based on conflict analysis
+ */
+TreeNode* find_conflict_backtrack_target(LayoutSolver* solver, TreePlacementOption* failed_options, int option_count) {
+    // Find the option with conflicts involving the shallowest components
+    int min_max_depth = 999;
+    TreePlacementOption* best_option = NULL;
+
+    for (int i = 0; i < option_count; i++) {
+        if (!failed_options[i].has_conflict) continue;
+
+        // Find the maximum depth among conflicting components for this option
+        int max_depth = 0;
+        for (int j = 0; j < failed_options[i].conflicts.conflict_count; j++) {
+            if (failed_options[i].conflicts.conflict_depths[j] > max_depth) {
+                max_depth = failed_options[i].conflicts.conflict_depths[j];
+            }
+        }
+
+        if (max_depth < min_max_depth) {
+            min_max_depth = max_depth;
+            best_option = &failed_options[i];
+        }
+    }
+
+    // TODO: Find actual tree node at the target depth
+    return NULL; // Placeholder
+}
+
+/**
+ * @brief Place a component at a tree node's position
+ */
+int tree_place_component(LayoutSolver* solver, TreeNode* node) {
+    if (!is_placement_valid(solver, node->component, node->x, node->y)) {
+        return 0;
+    }
+
+    place_component(solver, node->component, node->x, node->y);
+    return 1;
+}
+
+/**
+ * @brief Get the next constraint that involves already placed components
+ */
+DSLConstraint* get_next_constraint_involving_placed(LayoutSolver* solver) {
+    TreeSolver* ts = &solver->tree_solver;
+
+    for (int i = 0; i < ts->remaining_count; i++) {
+        DSLConstraint* constraint = ts->remaining_constraints[i];
+
+        Component* comp_a = find_component(solver, constraint->component_a);
+        Component* comp_b = find_component(solver, constraint->component_b);
+
+        // Check if exactly one component is placed
+        int a_placed = (comp_a && comp_a->is_placed);
+        int b_placed = (comp_b && comp_b->is_placed);
+
+        if ((a_placed && !b_placed) || (!a_placed && b_placed)) {
+            return constraint;
+        }
+    }
+
+    return NULL; // No more constraints with one placed component
+}
+
+// =============================================================================
+// TREE SOLVER DEBUG FUNCTIONS
+// =============================================================================
+
+/**
+ * @brief Initialize tree solver debug logging
+ */
+void init_tree_debug_file(LayoutSolver* solver) {
+    solver->tree_debug_file = fopen("tree_placement_debug.log", "w");
+    if (solver->tree_debug_file) {
+        fprintf(solver->tree_debug_file, "=============================================================================\n");
+        fprintf(solver->tree_debug_file, "TREE-BASED CONSTRAINT SOLVER - DEBUG LOG\n");
+        fprintf(solver->tree_debug_file, "=============================================================================\n\n");
+
+        // Log components and constraints summary
+        fprintf(solver->tree_debug_file, "COMPONENTS (%d total):\n", solver->component_count);
+        for (int i = 0; i < solver->component_count; i++) {
+            Component* comp = &solver->components[i];
+            fprintf(solver->tree_debug_file, "  %d. %s (%dx%d)\n", i + 1, comp->name, comp->width, comp->height);
+        }
+
+        fprintf(solver->tree_debug_file, "\nCONSTRAINTS (%d total):\n", solver->constraint_count);
+        for (int i = 0; i < solver->constraint_count; i++) {
+            DSLConstraint* constraint = &solver->constraints[i];
+            fprintf(solver->tree_debug_file, "  %d. %s ADJACENT %s %c\n", i + 1,
+                   constraint->component_a, constraint->component_b, constraint->direction);
+        }
+
+        fprintf(solver->tree_debug_file, "\n=============================================================================\n");
+        fprintf(solver->tree_debug_file, "TREE CONSTRAINT RESOLUTION PROCESS\n");
+        fprintf(solver->tree_debug_file, "=============================================================================\n\n");
+
+        fflush(solver->tree_debug_file);
+    }
+}
+
+/**
+ * @brief Close tree solver debug file
+ */
+void close_tree_debug_file(LayoutSolver* solver) {
+    if (solver->tree_debug_file) {
+        fprintf(solver->tree_debug_file, "\n=============================================================================\n");
+        fprintf(solver->tree_debug_file, "TREE SOLVER COMPLETE\n");
+        fprintf(solver->tree_debug_file, "=============================================================================\n");
+        fclose(solver->tree_debug_file);
+        solver->tree_debug_file = NULL;
+    }
+}
+
+/**
+ * @brief Log the start of processing a constraint
+ */
+void debug_log_tree_constraint_start(LayoutSolver* solver, DSLConstraint* constraint, Component* unplaced_comp) {
+    if (!solver->tree_debug_file) return;
+
+    fprintf(solver->tree_debug_file, "📋 PROCESSING CONSTRAINT: %s ADJACENT %s %c\n",
+           constraint->component_a, constraint->component_b, constraint->direction);
+    fprintf(solver->tree_debug_file, "   ├─ Component to place: %s (%dx%d)\n",
+           unplaced_comp->name, unplaced_comp->width, unplaced_comp->height);
+
+    // Show already placed components
+    fprintf(solver->tree_debug_file, "   ├─ Already placed components:\n");
+    for (int i = 0; i < solver->component_count; i++) {
+        Component* comp = &solver->components[i];
+        if (comp->is_placed) {
+            fprintf(solver->tree_debug_file, "   │  └─ %s at (%d,%d)\n",
+                   comp->name, comp->placed_x, comp->placed_y);
+        }
+    }
+    fprintf(solver->tree_debug_file, "\n");
+    fflush(solver->tree_debug_file);
+}
+
+/**
+ * @brief Log all generated placement options
+ */
+void debug_log_tree_placement_options(LayoutSolver* solver, TreePlacementOption* options, int option_count) {
+    if (!solver->tree_debug_file) return;
+
+    fprintf(solver->tree_debug_file, "🎯 GENERATED %d PLACEMENT OPTIONS:\n", option_count);
+    fprintf(solver->tree_debug_file, "   ┌─────┬──────────┬──────────┬─────────┬──────────┐\n");
+    fprintf(solver->tree_debug_file, "   │ #   │ Position │ Conflict │ Score   │ Status   │\n");
+    fprintf(solver->tree_debug_file, "   ├─────┼──────────┼──────────┼─────────┼──────────┤\n");
+
+    for (int i = 0; i < option_count && i < 20; i++) { // Limit to first 20 for readability
+        TreePlacementOption* opt = &options[i];
+        fprintf(solver->tree_debug_file, "   │ %3d │ (%3d,%3d) │ %s      │ %7d │ %s   │\n",
+               i + 1, opt->x, opt->y,
+               opt->has_conflict ? "YES" : "NO ",
+               opt->preference_score,
+               opt->has_conflict ? "DEFERRED" : "PRIORITY");
+    }
+
+    if (option_count > 20) {
+        fprintf(solver->tree_debug_file, "   │ ... │   ...    │   ...    │   ...   │   ...    │\n");
+        fprintf(solver->tree_debug_file, "   │     │ (%d more options omitted)        │          │\n", option_count - 20);
+    }
+
+    fprintf(solver->tree_debug_file, "   └─────┴──────────┴──────────┴─────────┴──────────┘\n\n");
+
+    // Show ordering logic
+    fprintf(solver->tree_debug_file, "🔄 ORDERING LOGIC:\n");
+    fprintf(solver->tree_debug_file, "   ├─ Primary: Conflict status (conflict-free first)\n");
+    fprintf(solver->tree_debug_file, "   ├─ Secondary: Preference score (higher first)\n");
+    fprintf(solver->tree_debug_file, "   │  ├─ Edge alignment: +10 points\n");
+    fprintf(solver->tree_debug_file, "   │  ├─ Perfect alignment: +10 points\n");
+    fprintf(solver->tree_debug_file, "   │  └─ Center alignment: +15 points\n");
+    fprintf(solver->tree_debug_file, "   └─ Result: Options ordered from most to least preferred\n\n");
+
+    fflush(solver->tree_debug_file);
+}
+
+/**
+ * @brief Log a placement attempt
+ */
+void debug_log_tree_placement_attempt(LayoutSolver* solver, Component* comp, int x, int y, int option_num, int success) {
+    if (!solver->tree_debug_file) return;
+
+    const char* result_symbol = success ? "✅" : "❌";
+    const char* result_text = success ? "SUCCESS" : "FAILED";
+
+    fprintf(solver->tree_debug_file, "%s PLACEMENT ATTEMPT #%d: %s at (%d,%d) - %s\n",
+           result_symbol, option_num, comp->name, x, y, result_text);
+
+    if (success) {
+        fprintf(solver->tree_debug_file, "   ├─ Component successfully placed\n");
+        fprintf(solver->tree_debug_file, "   └─ Creating child tree node at depth %d\n",
+               solver->tree_solver.current_node->depth + 1);
+    } else {
+        fprintf(solver->tree_debug_file, "   ├─ Placement validation failed\n");
+        fprintf(solver->tree_debug_file, "   └─ Trying next option...\n");
+    }
+    fprintf(solver->tree_debug_file, "\n");
+    fflush(solver->tree_debug_file);
+}
+
+/**
+ * @brief Log tree node creation
+ */
+void debug_log_tree_node_creation(LayoutSolver* solver, TreeNode* node) {
+    if (!solver->tree_debug_file) return;
+
+    fprintf(solver->tree_debug_file, "🌳 TREE NODE CREATED:\n");
+    fprintf(solver->tree_debug_file, "   ├─ Component: %s\n", node->component->name);
+    fprintf(solver->tree_debug_file, "   ├─ Position: (%d,%d)\n", node->x, node->y);
+    fprintf(solver->tree_debug_file, "   ├─ Tree depth: %d\n", node->depth);
+    fprintf(solver->tree_debug_file, "   ├─ Parent: %s\n",
+           node->parent ? node->parent->component->name : "ROOT");
+    fprintf(solver->tree_debug_file, "   └─ Total nodes created: %d\n", solver->tree_solver.nodes_created);
+    fprintf(solver->tree_debug_file, "\n");
+    fflush(solver->tree_debug_file);
+}
+
+/**
+ * @brief Log backtracking operation
+ */
+void debug_log_tree_backtrack(LayoutSolver* solver, int from_depth, int to_depth, const char* reason) {
+    if (!solver->tree_debug_file) return;
+
+    fprintf(solver->tree_debug_file, "🔄 BACKTRACKING:\n");
+    fprintf(solver->tree_debug_file, "   ├─ Reason: %s\n", reason);
+    fprintf(solver->tree_debug_file, "   ├─ From depth: %d\n", from_depth);
+    fprintf(solver->tree_debug_file, "   ├─ To depth: %d\n", to_depth);
+    fprintf(solver->tree_debug_file, "   └─ Backtrack type: %s\n",
+           (to_depth < from_depth - 1) ? "INTELLIGENT (conflict-depth)" : "STANDARD");
+    fprintf(solver->tree_debug_file, "\n");
+    fflush(solver->tree_debug_file);
+}
+
+/**
+ * @brief Log the final solution path
+ */
+void debug_log_tree_solution_path(LayoutSolver* solver) {
+    if (!solver->tree_debug_file) return;
+
+    fprintf(solver->tree_debug_file, "🎉 SOLUTION FOUND!\n");
+    fprintf(solver->tree_debug_file, "===================\n\n");
+
+    fprintf(solver->tree_debug_file, "📈 SOLUTION PATH:\n");
+    int step = 1;
+    for (int i = 0; i < solver->component_count; i++) {
+        Component* comp = &solver->components[i];
+        if (comp->is_placed) {
+            fprintf(solver->tree_debug_file, "   %d. %s placed at (%d,%d)\n",
+                   step++, comp->name, comp->placed_x, comp->placed_y);
+        }
+    }
+
+    fprintf(solver->tree_debug_file, "\n📊 SOLUTION STATISTICS:\n");
+    fprintf(solver->tree_debug_file, "   ├─ Total tree nodes: %d\n", solver->tree_solver.nodes_created);
+    fprintf(solver->tree_debug_file, "   ├─ Standard backtracks: %d\n", solver->tree_solver.backtracks_performed);
+    fprintf(solver->tree_debug_file, "   ├─ Conflict backtracks: %d\n", solver->tree_solver.conflict_backtracks);
+    fprintf(solver->tree_debug_file, "   └─ Components placed: %d/%d\n", step - 1, solver->component_count);
+
+    fflush(solver->tree_debug_file);
+}
+
+/**
+ * @brief Log current grid state for tree solver
+ */
+void debug_log_tree_grid_state(LayoutSolver* solver, const char* stage) {
+    if (!solver->tree_debug_file) return;
+
+    fprintf(solver->tree_debug_file, "🏗️  GRID STATE: %s\n", stage);
+    fprintf(solver->tree_debug_file, "====================\n");
+
+    // Find grid bounds
+    int min_x = 999, max_x = -999, min_y = 999, max_y = -999;
+
+    for (int i = 0; i < solver->component_count; i++) {
+        Component* comp = &solver->components[i];
+        if (comp->is_placed) {
+            if (comp->placed_x < min_x) min_x = comp->placed_x;
+            if (comp->placed_x + comp->width > max_x) max_x = comp->placed_x + comp->width;
+            if (comp->placed_y < min_y) min_y = comp->placed_y;
+            if (comp->placed_y + comp->height > max_y) max_y = comp->placed_y + comp->height;
+        }
+    }
+
+    // Add padding
+    min_x -= 2; max_x += 2; min_y -= 2; max_y += 2;
+
+    // Draw grid
+    for (int y = min_y; y < max_y; y++) {
+        fprintf(solver->tree_debug_file, "   ");
+        for (int x = min_x; x < max_x; x++) {
+            if (x >= 0 && x < MAX_GRID_SIZE && y >= 0 && y < MAX_GRID_SIZE) {
+                char c = solver->grid[y][x];
+                fprintf(solver->tree_debug_file, "%c", c == 0 ? '.' : c);
+            } else {
+                fprintf(solver->tree_debug_file, " ");
+            }
+        }
+        fprintf(solver->tree_debug_file, "\n");
+    }
+
+    fprintf(solver->tree_debug_file, "\n");
+    fflush(solver->tree_debug_file);
+}
+
+// =============================================================================

@@ -20,7 +20,6 @@ ADJACENT(Barracks, Armory, e)
 ADJACENT(Courtyard, Barracks, s)
 ADJACENT(Kitchen, Barracks, w)
 ADJACENT(Gatehouse, Kitchen, e)
-ADJACENT(Barracks, Armory, e)
 
 ## Component Tiles
 

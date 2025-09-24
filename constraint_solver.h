@@ -20,6 +20,9 @@
 #define MAX_OUTPUT_WIDTH 120         // Limit grid width output
 #define MAX_COMPONENT_GROUP_SIZE 20  // Maximum components in a group
 #define MAX_BACKTRACK_DEPTH 50       // Maximum backtracking depth
+#define MAX_SLIDE_CHAINS 10          // Maximum simultaneous sliding chains
+#define MAX_CHAIN_LENGTH 8           // Maximum components in a single sliding chain
+#define MAX_SLIDE_DISTANCE 20        // Maximum distance a component can slide
 
 typedef enum {
     DSL_ADJACENT
@@ -33,9 +36,27 @@ typedef enum {
 // 'a' = any direction
 typedef char Direction;
 
+// Sliding puzzle structures
+typedef struct SlideMove {
+    int component_index;                        // Which component to slide
+    Direction direction;                        // Direction to slide (n/s/e/w)
+    int distance;                              // How far to slide
+    int new_x, new_y;                          // Final position after slide
+} SlideMove;
+
+typedef struct SlideChain {
+    SlideMove moves[MAX_CHAIN_LENGTH];         // Sequence of moves to execute
+    int chain_length;                          // Number of moves in chain
+    int feasible;                              // Whether chain is geometrically valid
+    int constraint_preserving;                 // Whether chain preserves all constraints
+    int total_displacement;                    // Total grid area displacement
+    int target_x, target_y;                    // Target position we're trying to clear
+} SlideChain;
+
 // Constraint solver strategy enumeration
 typedef enum {
     SOLVER_RECURSIVE_TREE = 0,    // Recursive backtracking search tree with pruning
+    SOLVER_TREE_CONSTRAINT = 1,   // Tree-based constraint resolution with conflict-depth backtracking
     SOLVER_COUNT                  // Number of available solvers
 } ConstraintSolverType;
 
@@ -80,6 +101,58 @@ typedef struct PlacementOption {
     int x, y; // Specific placement coordinates
 } PlacementOption;
 
+// Tree-based constraint solver structures
+typedef struct ConflictInfo {
+    int conflicting_components[MAX_COMPONENTS];  // Indices of conflicting components
+    int conflict_depths[MAX_COMPONENTS];         // Tree depths where conflicts were placed
+    int conflict_count;                          // Number of conflicting components
+} ConflictInfo;
+
+typedef struct TreePlacementOption {
+    int x, y;                                    // Placement coordinates
+    int has_conflict;                            // Whether this placement has conflicts
+    ConflictInfo conflicts;                      // Details about conflicts if any
+    int preference_score;                        // Constraint preference score (edge alignment, etc.)
+} TreePlacementOption;
+
+typedef struct TreeNode {
+    Component* component;                        // Component being placed at this node
+    DSLConstraint* constraint;                   // Constraint being satisfied
+    int x, y;                                    // Placement position
+    int depth;                                   // Tree depth (room depth)
+    int component_index;                         // Index in solver->components array
+
+    // Placement options at this node
+    TreePlacementOption placement_options[200];  // All possible placements for next constraint
+    int option_count;                           // Number of placement options
+    int current_option;                         // Currently trying this option index
+
+    // Tree structure
+    struct TreeNode* parent;                    // Parent node
+    struct TreeNode* children[50];              // Child nodes
+    int child_count;                            // Number of children
+
+    // Backtracking info
+    int failed_completely;                      // Whether this subtree failed completely
+} TreeNode;
+
+typedef struct TreeSolver {
+    TreeNode* root;                             // Root of the search tree
+    TreeNode* current_node;                     // Currently active node
+    TreeNode* node_stack[MAX_BACKTRACK_DEPTH];  // Stack for backtracking
+    int stack_depth;                            // Current stack depth
+
+    // Constraint processing
+    DSLConstraint* remaining_constraints[MAX_CONSTRAINTS];  // Unprocessed constraints
+    int remaining_count;                        // Number of remaining constraints
+    DSLConstraint* current_constraint;          // Currently processing constraint
+
+    // Statistics
+    int nodes_created;                          // Total nodes created
+    int backtracks_performed;                   // Number of backtrack operations
+    int conflict_backtracks;                    // Number of conflict-based backtracks
+} TreeSolver;
+
 typedef struct LayoutSolver {
     Component components[MAX_COMPONENTS];
     int component_count;
@@ -91,10 +164,14 @@ typedef struct LayoutSolver {
     int placement_attempts[MAX_COMPONENTS]; // for backtracking
     int total_iterations; // Global iteration counter for safety
     int next_group_id;    // For assigning component group IDs
-    FILE* debug_file;     // Debug output file
+    FILE* debug_file;     // Debug output file for main solver
+    FILE* tree_debug_file; // Debug output file for tree solver
 
     // Solver configuration
     ConstraintSolverType solver_type;  // Which constraint solver strategy to use
+
+    // Tree-based constraint solver
+    TreeSolver tree_solver;            // Tree-based constraint resolution state
 
     // Backtracking stack
     BacktrackState backtrack_stack[MAX_BACKTRACK_DEPTH];
@@ -116,6 +193,14 @@ typedef struct LayoutSolver {
         int target_component;                       // Component being placed
         int conflict_resolved;                      // Whether conflict was resolved
     } conflict_state;
+
+    // Sliding puzzle conflict resolution
+    struct {
+        int active_chains;                          // Number of active sliding chains
+        int chain_attempts;                         // Number of chain attempts made
+        int successful_slides;                      // Number of successful slide operations
+        int max_chain_length;                       // Longest successful chain length
+    } slide_stats;
 } LayoutSolver;
 
 // =============================================================================
@@ -132,7 +217,8 @@ int solve_constraints(LayoutSolver* solver);
 // =============================
 // MODULAR SOLVER STRATEGIES
 // =============================
-int solve_recursive_tree(LayoutSolver* solver);  // Recursive backtracking with pruning
+int solve_recursive_tree(LayoutSolver* solver);        // Recursive backtracking with pruning
+int solve_tree_constraint(LayoutSolver* solver);       // Tree-based constraint resolution
 
 // =============================
 // COMPONENT MANAGEMENT
@@ -191,6 +277,20 @@ int attempt_conflict_resolution(LayoutSolver* solver, Component* target_comp, in
 int try_relocate_component(LayoutSolver* solver, int comp_index, Component* target_comp);
 
 // =============================
+// SLIDING PUZZLE CONFLICT RESOLUTION
+// =============================
+int attempt_sliding_resolution(LayoutSolver* solver, Component* target_comp, int x, int y);
+int find_sliding_chains(LayoutSolver* solver, Component* target_comp, int x, int y, SlideChain* chains, int* chain_count);
+int validate_slide_chain(LayoutSolver* solver, SlideChain* chain);
+int execute_slide_chain(LayoutSolver* solver, SlideChain* chain);
+int can_component_slide(LayoutSolver* solver, int comp_index, Direction dir, int* max_distance);
+int calculate_slide_move(LayoutSolver* solver, int comp_index, Direction dir, int distance, SlideMove* move);
+int check_constraint_preservation(LayoutSolver* solver, SlideChain* chain);
+void rollback_slide_chain(LayoutSolver* solver, SlideChain* chain);
+int find_directional_slide_chain(LayoutSolver* solver, int comp_index, Direction push_dir, SlideChain* chain);
+int component_mobility_score(LayoutSolver* solver, int comp_index);
+
+// =============================
 // RECURSIVE TREE SOLVER INTERNALS (PRIVATE)
 // =============================
 int place_component_recursive(LayoutSolver* solver, int depth);
@@ -199,6 +299,35 @@ void get_placement_options(LayoutSolver* solver, Component* comp, PlacementOptio
 Component* get_next_component_intelligent(LayoutSolver* solver);
 void record_failed_position(LayoutSolver* solver, int component_index, int x, int y);
 int is_position_failed(LayoutSolver* solver, int component_index, int x, int y);
+
+// =============================
+// TREE CONSTRAINT SOLVER INTERNALS (PRIVATE)
+// =============================
+void init_tree_solver(LayoutSolver* solver);
+void cleanup_tree_solver(LayoutSolver* solver);
+TreeNode* create_tree_node(Component* comp, DSLConstraint* constraint, int x, int y, int depth, int comp_index);
+void free_tree_node(TreeNode* node);
+int generate_placement_options_for_constraint(LayoutSolver* solver, DSLConstraint* constraint, Component* unplaced_comp, TreePlacementOption* options);
+void order_placement_options(TreePlacementOption* options, int option_count);
+int calculate_preference_score(LayoutSolver* solver, Component* comp, DSLConstraint* constraint, int x, int y);
+void detect_placement_conflicts_detailed(LayoutSolver* solver, Component* comp, int x, int y, ConflictInfo* conflicts);
+TreeNode* find_conflict_backtrack_target(LayoutSolver* solver, TreePlacementOption* failed_options, int option_count);
+int tree_place_component(LayoutSolver* solver, TreeNode* node);
+int advance_to_next_constraint(LayoutSolver* solver);
+DSLConstraint* get_next_constraint_involving_placed(LayoutSolver* solver);
+
+// =============================
+// TREE SOLVER DEBUG FUNCTIONS
+// =============================
+void init_tree_debug_file(LayoutSolver* solver);
+void close_tree_debug_file(LayoutSolver* solver);
+void debug_log_tree_constraint_start(LayoutSolver* solver, DSLConstraint* constraint, Component* unplaced_comp);
+void debug_log_tree_placement_options(LayoutSolver* solver, TreePlacementOption* options, int option_count);
+void debug_log_tree_placement_attempt(LayoutSolver* solver, Component* comp, int x, int y, int option_num, int success);
+void debug_log_tree_node_creation(LayoutSolver* solver, TreeNode* node);
+void debug_log_tree_backtrack(LayoutSolver* solver, int from_depth, int to_depth, const char* reason);
+void debug_log_tree_solution_path(LayoutSolver* solver);
+void debug_log_tree_grid_state(LayoutSolver* solver, const char* stage);
 
 // =============================
 // DYNAMIC GRID SYSTEM

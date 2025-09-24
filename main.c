@@ -270,6 +270,7 @@ int parse_specification_string(const char* specification, LayoutSolver* solver) 
 void parse_and_solve_specification(const char* specification) {
     LayoutSolver solver;
     init_solver(&solver, 60, 40);
+    set_solver_type(&solver, SOLVER_TREE_CONSTRAINT); // Use tree-based solver
     
     // If specification starts with a filename, load from file
     if (strstr(specification, ".txt") && strlen(specification) < 100) {
