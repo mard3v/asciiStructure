@@ -23,6 +23,63 @@ int parse_specification_file(const char* filename, LayoutSolver* solver);
 int parse_specification_string(const char* specification, LayoutSolver* solver);
 void parse_and_solve_specification(const char* specification);
 void show_menu(void);
+int list_test_files(char filenames[][256], int max_files);
+void load_test_file_menu(void);
+
+/**
+ * @brief Lists available test files in the tests/ directory and returns count
+ */
+int list_test_files(char filenames[][256], int max_files) {
+    printf("\n📁 Available test files:\n");
+    printf("----------------------------------------\n");
+
+    // Use popen to read directory listing
+    FILE* fp = popen("ls -1 tests/*.txt 2>/dev/null | sed 's|tests/||'", "r");
+    if (!fp) {
+        printf("❌ Error reading test directory\n");
+        return 0;
+    }
+
+    int count = 0;
+    while (count < max_files && fgets(filenames[count], 256, fp) != NULL) {
+        // Remove trailing newline
+        filenames[count][strcspn(filenames[count], "\n")] = 0;
+        printf("%2d. %s\n", count + 1, filenames[count]);
+        count++;
+    }
+    pclose(fp);
+
+    printf("----------------------------------------\n");
+    return count;
+}
+
+/**
+ * @brief Handles test file selection and loading
+ */
+void load_test_file_menu(void) {
+    char filenames[20][256];
+    int file_count = list_test_files(filenames, 20);
+
+    if (file_count == 0) {
+        printf("❌ No test files found in tests/ directory\n");
+        return;
+    }
+
+    printf("\nEnter number (1-%d): ", file_count);
+    int choice;
+    scanf("%d", &choice);
+
+    if (choice < 1 || choice > file_count) {
+        printf("❌ Invalid selection\n");
+        return;
+    }
+
+    // Build full path
+    char full_path[300];
+    snprintf(full_path, sizeof(full_path), "tests/%s", filenames[choice - 1]);
+
+    parse_and_solve_specification(full_path);
+}
 
 /**
  * @brief Displays the interactive menu with available structure types and options
@@ -35,7 +92,7 @@ void show_menu(void) {
     printf("3. Generate Dungeon\n");
     printf("4. Generate Cathedral\n");
     printf("5. Generate Tower\n");
-    printf("6. Load test_castle.txt and solve\n");
+    printf("6. Load test file\n");
     printf("7. Load custom file and solve\n");
     printf("8. Test string parsing (no API needed)\n");
     printf("0. Exit\n");
@@ -329,7 +386,7 @@ int main() {
             case 4: strcpy(structure_type, "cathedral"); break;
             case 5: strcpy(structure_type, "tower"); break;
             case 6:
-                parse_and_solve_specification("test_castle.txt");
+                load_test_file_menu();
                 return 0; // Exit after processing
             case 7:
                 printf("Enter filename: ");

@@ -98,10 +98,19 @@ Run the interactive menu:
 3. **Generate Dungeon** - LLM-generated dungeon layout
 4. **Generate Cathedral** - LLM-generated cathedral layout
 5. **Generate Tower** - LLM-generated tower layout
-6. **Load test_castle.txt and solve** - Use predefined test structure
+6. **Load test file** - Select from test files in `tests/` directory
 7. **Load custom file and solve** - Load your own DSL file
 8. **Test string parsing** - Test built-in parsing with sample data
 0. **Exit**
+
+### Test Files
+
+Test specifications are stored in the `tests/` directory:
+
+- **simple_castle.txt** - Basic castle with 6 components and 6 constraints
+- **palace.txt** - Complex palace with 9 components and 9 constraints (demonstrates backtracking)
+
+Add your own test files to this directory and load them via menu option 6.
 
 ### Constraint Testing
 
