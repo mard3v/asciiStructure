@@ -1492,9 +1492,6 @@ int advance_to_next_constraint(LayoutSolver *solver) {
 
   printf("✅ Created %d child nodes, now trying them in order...\n", valid_count);
 
-  // Log the tree structure showing all pre-generated options
-  debug_log_current_tree_structure(solver, ts->current_node);
-
   // Now try each child in order (best to worst)
   for (int i = 0; i < ts->current_node->child_count; i++) {
     TreeNode *child = ts->current_node->children[i];
@@ -1546,9 +1543,6 @@ int advance_to_next_constraint(LayoutSolver *solver) {
     printf("  ❌ Branch failed, marking with X and trying next option\n");
     child->marked_failed = 1;
     child->being_explored = 0;
-
-    // Log updated tree showing the X
-    debug_log_current_tree_structure(solver, child->parent);
 
     // Backtrack: remove component and restore constraint
     remove_component(solver, unplaced_comp);
