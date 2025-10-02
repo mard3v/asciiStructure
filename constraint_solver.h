@@ -109,6 +109,14 @@ typedef struct TreeNode {
 
     // Backtracking info
     int failed_completely;                      // Whether this subtree failed completely
+    int placement_succeeded;                    // Whether this node's placement succeeded (vs failed attempt)
+    int being_explored;                         // Whether we're currently exploring this branch
+    int marked_failed;                          // Marked with X - this path failed
+
+    // Systematic backtracking: track THIS node's placement alternatives
+    TreePlacementOption my_placement_alternatives[200];  // All options available when this node was placed
+    int my_alternatives_count;                           // Number of alternatives for this node
+    int my_current_alternative_index;                    // Which alternative we're currently using (index in my_placement_alternatives)
 } TreeNode;
 
 typedef struct TreeSolver {
@@ -124,8 +132,7 @@ typedef struct TreeSolver {
 
     // Statistics
     int nodes_created;                          // Total nodes created
-    int backtracks_performed;                   // Number of backtrack operations
-    int conflict_backtracks;                    // Number of conflict-based backtracks
+    int backtracks;                             // Number of backtracking operations performed
 } TreeSolver;
 
 typedef struct LayoutSolver {
@@ -251,6 +258,16 @@ TreeNode* find_conflict_backtrack_target(LayoutSolver* solver, TreePlacementOpti
 int tree_place_component(LayoutSolver* solver, TreeNode* node);
 int advance_to_next_constraint(LayoutSolver* solver);
 DSLConstraint* get_next_constraint_involving_placed(LayoutSolver* solver);
+
+// =============================
+// SYSTEMATIC BACKTRACKING (BFS-STYLE)
+// =============================
+int systematic_backtrack_and_retry(LayoutSolver* solver);
+int collect_all_tree_nodes(TreeNode* node, TreeNode** nodes_array, int* count);
+void sort_nodes_by_depth_descending(TreeNode** nodes, int count);
+int try_node_alternative_and_rebuild(LayoutSolver* solver, TreeNode* node);
+int rebuild_subtree_from_node(LayoutSolver* solver, TreeNode* node);
+void remove_node_and_descendants_from_grid(LayoutSolver* solver, TreeNode* node);
 
 // =============================
 // TREE SOLVER DEBUG FUNCTIONS - MOVED TO tree_debug.h

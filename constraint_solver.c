@@ -1301,6 +1301,7 @@ int solve_tree_constraint(LayoutSolver *solver) {
   int root_comp_index = root_comp - solver->components;
   solver->tree_solver.root =
       create_tree_node(root_comp, NULL, root_x, root_y, 0, root_comp_index);
+  solver->tree_solver.root->placement_succeeded = 1;  // Root always succeeds
   solver->tree_solver.current_node = solver->tree_solver.root;
 
   // Log initial grid state
@@ -1346,9 +1347,8 @@ void cleanup_tree_solver(LayoutSolver *solver) {
     ts->root = NULL;
   }
 
-  printf(
-      "📊 Tree solver stats: %d nodes, %d backtracks, %d conflict backtracks\n",
-      ts->nodes_created, ts->backtracks_performed, ts->conflict_backtracks);
+  printf("📊 Tree solver stats: %d nodes, %d backtracks\n",
+         ts->nodes_created, ts->backtracks);
 }
 
 /**
@@ -1456,76 +1456,111 @@ int advance_to_next_constraint(LayoutSolver *solver) {
   // Log placement options
   debug_log_tree_placement_options(solver, options, option_count);
 
-  // Try each option in order
+  // Filter out conflicting options - only keep valid placement options
+  TreePlacementOption valid_options[200];
+  int valid_count = 0;
   for (int i = 0; i < option_count; i++) {
-    TreePlacementOption *option = &options[i];
-
-    printf("🎯 Trying option %d: (%d,%d) conflict=%d score=%d\n", i + 1,
-           option->x, option->y, option->has_conflict,
-           option->preference_score);
-
-    if (option->has_conflict) {
-      printf("⚠️  Option has conflicts - trying anyway\n");
+    if (!options[i].has_conflict) {
+      valid_options[valid_count++] = options[i];
     }
+  }
 
-    // Create child node for this placement
-    int comp_index = unplaced_comp - solver->components;
-    TreeNode *child =
-        create_tree_node(unplaced_comp, next_constraint, option->x, option->y,
-                         ts->current_node->depth + 1, comp_index);
+  printf("📋 Filtered to %d valid (non-conflicting) placement options\n", valid_count);
+
+  if (valid_count == 0) {
+    printf("⚠️  No valid placement options - backtracking required\n");
+    return 0; // No options available
+  }
+
+  // PRE-GENERATE all child nodes for valid placement options (ordered best to worst)
+  printf("🌳 Pre-generating %d child nodes for all valid options...\n", valid_count);
+  int comp_index = unplaced_comp - solver->components;
+
+  for (int i = 0; i < valid_count; i++) {
+    TreePlacementOption *option = &valid_options[i];
+
+    TreeNode *child = create_tree_node(unplaced_comp, next_constraint, option->x, option->y,
+                                       ts->current_node->depth + 1, comp_index);
+    child->placement_succeeded = 0;  // Not yet tried
+    child->being_explored = 0;
+    child->marked_failed = 0;
 
     ts->current_node->children[ts->current_node->child_count++] = child;
     child->parent = ts->current_node;
     ts->nodes_created++;
+  }
+
+  printf("✅ Created %d child nodes, now trying them in order...\n", valid_count);
+
+  // Log the tree structure showing all pre-generated options
+  debug_log_current_tree_structure(solver, ts->current_node);
+
+  // Now try each child in order (best to worst)
+  for (int i = 0; i < ts->current_node->child_count; i++) {
+    TreeNode *child = ts->current_node->children[i];
+
+    if (child->marked_failed) {
+      printf("⏭️  Skipping child %d - already marked as failed\n", i + 1);
+      continue;
+    }
+
+    printf("🎯 Exploring option %d/%d: %s at (%d,%d)\n", i + 1, valid_count,
+           child->component->name, child->x, child->y);
+
+    child->being_explored = 1;
 
     // Try placing component at this position
     int placement_success = tree_place_component(solver, child);
-    debug_log_tree_placement_attempt(solver, unplaced_comp, option->x,
-                                     option->y, i + 1, placement_success);
 
-    if (placement_success) {
-      // Success - move to this node and continue
-      ts->current_node = child;
-      debug_log_tree_node_creation(solver, child);
-
-      // Remove this constraint from remaining
-      for (int j = 0; j < ts->remaining_count; j++) {
-        if (ts->remaining_constraints[j] == next_constraint) {
-          for (int k = j; k < ts->remaining_count - 1; k++) {
-            ts->remaining_constraints[k] = ts->remaining_constraints[k + 1];
-          }
-          ts->remaining_count--;
-          break;
-        }
-      }
-
-      // Recursively process next constraint
-      int result = advance_to_next_constraint(solver);
-      if (result) {
-        return 1; // Success
-      }
-
-      // Failed - backtrack
-      remove_component(solver, unplaced_comp);
-      ts->current_node = child->parent;
+    if (!placement_success) {
+      printf("  ❌ Placement failed (overlap or invalid)\n");
+      child->marked_failed = 1;
+      child->being_explored = 0;
+      continue;
     }
 
-    // This option failed, try next
+    // Placement succeeded at this node
+    child->placement_succeeded = 1;
+    ts->current_node = child;
+
+    debug_log_tree_node_creation(solver, child);
+
+    // Remove this constraint from remaining
+    for (int j = 0; j < ts->remaining_count; j++) {
+      if (ts->remaining_constraints[j] == next_constraint) {
+        for (int k = j; k < ts->remaining_count - 1; k++) {
+          ts->remaining_constraints[k] = ts->remaining_constraints[k + 1];
+        }
+        ts->remaining_count--;
+        break;
+      }
+    }
+
+    // Recursively process next constraint
+    int result = advance_to_next_constraint(solver);
+    if (result) {
+      return 1; // Success!
+    }
+
+    // Failed deeper in the tree - mark this branch as failed
+    printf("  ❌ Branch failed, marking with X and trying next option\n");
+    child->marked_failed = 1;
+    child->being_explored = 0;
+
+    // Log updated tree showing the X
+    debug_log_current_tree_structure(solver, child->parent);
+
+    // Backtrack: remove component and restore constraint
+    remove_component(solver, unplaced_comp);
+    ts->current_node = child->parent;
+
+    // Re-add constraint to remaining
+    ts->remaining_constraints[ts->remaining_count++] = next_constraint;
   }
 
-  // All options failed - need intelligent backtracking
-  printf("❌ All placement options failed for constraint\n");
-
-  // Analyze conflicts for intelligent backtracking
-  TreeNode *backtrack_target =
-      find_conflict_backtrack_target(solver, options, option_count);
-  if (backtrack_target) {
-    printf("🔄 Intelligent backtrack to depth %d\n", backtrack_target->depth);
-    ts->conflict_backtracks++;
-    // TODO: Implement backtracking to specific node
-  }
-
-  return 0; // Failed
+  // All options failed
+  printf("❌ All %d placement options exhausted for %s\n", valid_count, unplaced_comp->name);
+  return 0;
 }
 
 /**
@@ -1686,4 +1721,269 @@ DSLConstraint *get_next_constraint_involving_placed(LayoutSolver *solver) {
   }
 
   return NULL; // No more constraints with one placed component
+}
+
+// =============================================================================
+// SYSTEMATIC BACKTRACKING IMPLEMENTATION (BFS-STYLE)
+// =============================================================================
+
+/**
+ * @brief Recursively collect all nodes in the tree into an array
+ */
+int collect_all_tree_nodes(TreeNode* node, TreeNode** nodes_array, int* count) {
+  if (!node || *count >= MAX_COMPONENTS) {
+    return 0;
+  }
+
+  // Add this node to array
+  nodes_array[*count] = node;
+  (*count)++;
+
+  // Recursively collect children
+  for (int i = 0; i < node->child_count; i++) {
+    collect_all_tree_nodes(node->children[i], nodes_array, count);
+  }
+
+  return 1;
+}
+
+/**
+ * @brief Sort nodes by depth in descending order (deepest first - leaves to root)
+ */
+void sort_nodes_by_depth_descending(TreeNode** nodes, int count) {
+  // Simple bubble sort
+  for (int i = 0; i < count - 1; i++) {
+    for (int j = 0; j < count - i - 1; j++) {
+      if (nodes[j]->depth < nodes[j + 1]->depth) {
+        TreeNode* temp = nodes[j];
+        nodes[j] = nodes[j + 1];
+        nodes[j + 1] = temp;
+      }
+    }
+  }
+}
+
+/**
+ * @brief Remove a node and all its descendants from the grid
+ */
+void remove_node_and_descendants_from_grid(LayoutSolver* solver, TreeNode* node) {
+  if (!node) return;
+
+  // First remove all descendants
+  for (int i = 0; i < node->child_count; i++) {
+    remove_node_and_descendants_from_grid(solver, node->children[i]);
+  }
+
+  // Then remove this node
+  if (node->component && node->component->is_placed) {
+    remove_component(solver, node->component);
+  }
+}
+
+/**
+ * @brief Rebuild the subtree from a given node forward
+ * This tries to rebuild all descendants using their original constraints
+ */
+int rebuild_subtree_from_node(LayoutSolver* solver, TreeNode* node) {
+  if (node->child_count > 0) {
+    printf("🔧 Rebuilding subtree from %s (depth %d) - %d children to rebuild\n",
+           node->component->name, node->depth, node->child_count);
+  }
+
+  // For each child, try to place it using its constraint
+  for (int i = 0; i < node->child_count; i++) {
+    TreeNode* child = node->children[i];
+
+    printf("  🔄 Attempting to rebuild: %s\n", child->component->name);
+
+    // Check if child's current position is still valid
+    if (is_placement_valid(solver, child->component, child->x, child->y)) {
+      // Place at same position
+      printf("    ✅ Original position (%d,%d) still valid\n", child->x, child->y);
+      place_component(solver, child->component, child->x, child->y);
+
+      // Recursively rebuild this child's subtree
+      if (!rebuild_subtree_from_node(solver, child)) {
+        printf("    ❌ Failed to rebuild descendants of %s\n", child->component->name);
+        return 0; // Failed to rebuild
+      }
+    } else {
+      // Current position not valid, try alternatives
+      printf("    ⚠️  Original position (%d,%d) no longer valid, trying %d alternatives\n",
+             child->x, child->y, child->my_alternatives_count);
+
+      int found_valid = 0;
+      for (int alt_idx = 0; alt_idx < child->my_alternatives_count; alt_idx++) {
+        TreePlacementOption* alt = &child->my_placement_alternatives[alt_idx];
+
+        if (is_placement_valid(solver, child->component, alt->x, alt->y)) {
+          printf("    ✅ Alternative %d/%d at (%d,%d) is valid\n",
+                 alt_idx + 1, child->my_alternatives_count, alt->x, alt->y);
+
+          // Update child position
+          child->x = alt->x;
+          child->y = alt->y;
+          child->my_current_alternative_index = alt_idx;
+
+          place_component(solver, child->component, alt->x, alt->y);
+
+          // Try to rebuild this child's subtree
+          if (rebuild_subtree_from_node(solver, child)) {
+            found_valid = 1;
+            break;
+          }
+
+          // Failed, remove and try next alternative
+          printf("    ⚠️  Descendants failed, trying next alternative\n");
+          remove_component(solver, child->component);
+        }
+      }
+
+      if (!found_valid) {
+        printf("    ❌ No valid alternatives found for %s\n", child->component->name);
+        return 0; // Couldn't find valid placement for child
+      }
+    }
+  }
+
+  if (node->child_count > 0) {
+    printf("  ✅ Successfully rebuilt all %d children of %s\n",
+           node->child_count, node->component->name);
+  }
+
+  return 1; // Successfully rebuilt subtree
+}
+
+/**
+ * @brief Try an alternative placement for a node and rebuild its subtree
+ * Returns 1 if successful, 0 if failed
+ */
+int try_node_alternative_and_rebuild(LayoutSolver* solver, TreeNode* node) {
+  int old_x = node->x;
+  int old_y = node->y;
+
+  // Find next untried alternative
+  for (int alt_idx = node->my_current_alternative_index + 1;
+       alt_idx < node->my_alternatives_count; alt_idx++) {
+
+    TreePlacementOption* alt = &node->my_placement_alternatives[alt_idx];
+
+    printf("  🔄 Trying alternative %d/%d for %s: (%d,%d) score=%d conflict=%d\n",
+           alt_idx + 1, node->my_alternatives_count, node->component->name,
+           alt->x, alt->y, alt->preference_score, alt->has_conflict);
+
+    // Check if this alternative is valid
+    if (!is_placement_valid(solver, node->component, alt->x, alt->y)) {
+      printf("    ❌ Alternative position not valid\n");
+      continue;
+    }
+
+    // Update node to use this alternative
+    node->x = alt->x;
+    node->y = alt->y;
+    node->my_current_alternative_index = alt_idx;
+
+    // Place component at new position
+    place_component(solver, node->component, alt->x, alt->y);
+
+    // Try to rebuild descendants
+    if (rebuild_subtree_from_node(solver, node)) {
+      printf("    ✅ Successfully placed at alternative position and rebuilt subtree\n");
+      return 1;
+    }
+
+    // Failed to rebuild, remove and try next alternative
+    printf("    ❌ Failed to rebuild subtree\n");
+    remove_component(solver, node->component);
+  }
+
+  return 0; // No valid alternatives found
+}
+
+/**
+ * @brief Main systematic backtracking function
+ * Tries alternative placements for earlier nodes, starting from leaves and working toward root
+ */
+int systematic_backtrack_and_retry(LayoutSolver* solver) {
+  TreeSolver* ts = &solver->tree_solver;
+
+  printf("\n🌳 SYSTEMATIC BACKTRACKING\n");
+  printf("   Strategy: Try alternative placements for earlier nodes (leaves → root)\n");
+
+  // Collect all nodes in the tree
+  TreeNode* all_nodes[MAX_COMPONENTS];
+  int node_count = 0;
+  collect_all_tree_nodes(ts->root, all_nodes, &node_count);
+
+  printf("   Collected %d nodes in tree\n", node_count);
+
+  // Sort by depth descending (deepest/most recent first)
+  sort_nodes_by_depth_descending(all_nodes, node_count);
+
+  printf("   Trying alternatives starting from depth %d down to depth %d\n",
+         node_count > 0 ? all_nodes[0]->depth : 0,
+         node_count > 0 ? all_nodes[node_count-1]->depth : 0);
+
+  // Try each node (skip root since we don't reposition it)
+  for (int i = 0; i < node_count; i++) {
+    TreeNode* node = all_nodes[i];
+
+    // Skip root node
+    if (node->depth == 0) {
+      printf("\n  ⏭️  Skipping root node\n");
+      continue;
+    }
+
+    // Check if this node has untried alternatives
+    int has_untried = (node->my_current_alternative_index + 1 < node->my_alternatives_count);
+
+    if (!has_untried) {
+      printf("\n  ⏭️  Node %s (depth %d) has no untried alternatives\n",
+             node->component->name, node->depth);
+      continue;
+    }
+
+    printf("\n  🎯 Trying alternatives for %s (depth %d, currently at option %d/%d)\n",
+           node->component->name, node->depth,
+           node->my_current_alternative_index + 1, node->my_alternatives_count);
+
+    // Save current state: we need to remove this node and all descendants
+    printf("    Removing node and descendants from grid...\n");
+    remove_node_and_descendants_from_grid(solver, node);
+
+    // Save old position for logging
+    int old_node_x = node->x;
+    int old_node_y = node->y;
+    int old_alt_index = node->my_current_alternative_index;
+
+    // Try alternative placements for this node
+    int repositioned_successfully = try_node_alternative_and_rebuild(solver, node);
+    if (repositioned_successfully) {
+      // Successfully repositioned this node and rebuilt its subtree
+      // Update current_node to this repositioned node to show we're backtracking at this level
+      solver->tree_solver.current_node = node;
+
+      // Log the backtrack event now, with current_node at the repositioned level
+      debug_log_backtrack_event(solver, node, old_node_x, old_node_y, node->x, node->y);
+
+      // Now try to continue with the original constraint that failed
+      printf("    ✅ Node repositioned successfully, attempting to continue solving...\n");
+
+      int result = advance_to_next_constraint(solver);
+      if (result) {
+        printf("  ✅ SUCCESS: Systematic backtracking resolved the issue!\n");
+        return 1;
+      }
+
+      // Still failed, restore state and try next node
+      printf("    ❌ Still couldn't place remaining components\n");
+    }
+
+    // Failed with this node, restore its original placement for next iteration
+    // Actually, since we're trying alternatives, we'll leave it in its last attempted state
+    // The next iteration will try a different node
+  }
+
+  printf("\n  ❌ Systematic backtracking exhausted all node alternatives\n");
+  return 0;
 }

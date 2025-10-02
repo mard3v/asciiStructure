@@ -1,0 +1,85 @@
+## Components
+
+**Gatehouse** - The main entrance with defensive features. Medium scale fortified entry point with portcullis and guard posts.
+
+**Courtyard** - Large open central area for gatherings and movement. Large scale open space that serves as the heart of the castle.
+
+**Keep** - The main defensive tower and residence. Large scale central fortification containing treasure and important rooms.
+
+**Barracks** - Soldier quarters and training area. Medium scale military housing with beds and equipment storage.
+
+**Armory** - Weapon and armor storage facility. Small scale secure storage for military equipment.
+
+**Kitchen** - Food preparation and storage area. Medium scale cooking facility with hearths and provisions.
+
+## Constraints
+
+ADJACENT(Gatehouse, Courtyard, n)
+ADJACENT(Courtyard, Keep, n)
+ADJACENT(Barracks, Armory, e)
+ADJACENT(Courtyard, Barracks, s)
+ADJACENT(Kitchen, Barracks, w)
+ADJACENT(Gatehouse, Kitchen, e)
+
+## Component Tiles
+
+**Gatehouse:**
+```
+XXXXXXX
+X.....X
+X..D..X
+X.....X
+X.....X
+XXXXXXX
+```
+
+**Courtyard:**
+```
+...........
+...........
+...........
+.....:.....
+...........
+...........
+...........
+```
+
+**Keep:**
+```
+XXXXXXXXX
+X.......X
+X..$....X
+X...a...X
+X.......X
+X.......X
+XXXXXXXXX
+```
+
+**Barracks:**
+```
+XXXXXXX
+X.B.B.X
+X.....X
+X.B.B.X
+X.....X
+XXXXXXX
+```
+
+**Armory:**
+```
+XXXXX
+X.M.X
+X.C.X
+X.M.X
+XXXXX
+```
+
+**Kitchen:**
+```
+XXXXXXX
+X.s.%.X
+X.....X
+X.T...X
+X.....X
+XXXXXXX
+```

@@ -18,5 +18,6 @@ void debug_log_tree_solution_path(LayoutSolver* solver);
 void debug_log_enhanced_grid_state(LayoutSolver* solver, const char* stage);
 void debug_log_current_tree_structure(LayoutSolver* solver, TreeNode* current_node);
 void debug_log_placement_success_with_grid(LayoutSolver* solver, Component* comp);
+void debug_log_backtrack_event(LayoutSolver* solver, TreeNode* repositioned_node, int old_x, int old_y, int new_x, int new_y);
 
 #endif // TREE_DEBUG_H

@@ -198,8 +198,7 @@ void debug_log_tree_solution_path(LayoutSolver* solver) {
 
     fprintf(solver->tree_debug_file, "\n📊 SOLUTION STATISTICS:\n");
     fprintf(solver->tree_debug_file, "   ├─ Total tree nodes: %d\n", solver->tree_solver.nodes_created);
-    fprintf(solver->tree_debug_file, "   ├─ Standard backtracks: %d\n", solver->tree_solver.backtracks_performed);
-    fprintf(solver->tree_debug_file, "   ├─ Conflict backtracks: %d\n", solver->tree_solver.conflict_backtracks);
+    fprintf(solver->tree_debug_file, "   ├─ Backtracks performed: %d\n", solver->tree_solver.backtracks);
     fprintf(solver->tree_debug_file, "   └─ Components placed: %d/%d\n", step - 1, solver->component_count);
 
     fflush(solver->tree_debug_file);
@@ -274,55 +273,194 @@ void debug_log_placement_success_with_grid(LayoutSolver* solver, Component* comp
 }
 
 /**
- * @brief Display current tree structure showing the path to current node
+ * @brief Check if all children of a node are marked as failed
+ */
+static int all_children_failed(TreeNode* node) {
+    if (node->child_count == 0) return 0;
+
+    for (int i = 0; i < node->child_count; i++) {
+        if (!node->children[i]->marked_failed) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * @brief Find which child (if any) is on the path to current node
+ */
+static int find_path_child_index(TreeNode* node, TreeNode* current_node) {
+    for (int i = 0; i < node->child_count; i++) {
+        TreeNode* child = node->children[i];
+
+        // Check if current_node is this child or a descendant
+        TreeNode* check = current_node;
+        while (check) {
+            if (check == child) return i;
+            check = check->parent;
+        }
+    }
+    return -1;
+}
+
+/**
+ * @brief Recursively display tree structure with smart filtering
+ */
+static void print_tree_recursive(FILE* file, TreeNode* node, TreeNode* current_node,
+                                  int depth, char* prefix, int is_last) {
+    if (!node) return;
+
+    fprintf(file, "   │ %s", prefix);
+
+    // Draw tree branch
+    if (depth == 0) {
+        fprintf(file, "🌱 ROOT: ");
+    } else {
+        fprintf(file, "%s ", is_last ? "└─" : "├─");
+    }
+
+    // Show component name and position
+    int collapsed_failed_subtree = node->marked_failed && all_children_failed(node);
+
+    if (collapsed_failed_subtree) {
+        fprintf(file, "✗ %s at (%d,%d) [FAILED - all children failed]", node->component->name, node->x, node->y);
+    } else if (node->marked_failed) {
+        fprintf(file, "✗ %s at (%d,%d) [FAILED]", node->component->name, node->x, node->y);
+    } else if (node->being_explored) {
+        fprintf(file, "%s at (%d,%d) [EXPLORING]", node->component->name, node->x, node->y);
+    } else if (node->placement_succeeded) {
+        fprintf(file, "%s at (%d,%d)", node->component->name, node->x, node->y);
+    } else {
+        // Not yet tried
+        fprintf(file, "%s at (%d,%d) [UNTRIED]", node->component->name, node->x, node->y);
+    }
+
+    // Mark if this is the current node
+    if (node == current_node) {
+        fprintf(file, " ← CURRENT");
+    }
+
+    fprintf(file, "\n");
+
+    // Recursively display children (with smart filtering)
+    if (node->child_count > 0 && !collapsed_failed_subtree) {
+        // Build new prefix for children
+        char new_prefix[256];
+        if (depth == 0) {
+            new_prefix[0] = '\0';  // Empty string
+        } else {
+            snprintf(new_prefix, sizeof(new_prefix), "%s%s", prefix, is_last ? "   " : "│  ");
+        }
+
+        // Find which child (if any) is on path to current
+        int path_child = find_path_child_index(node, current_node);
+
+        // Show max 5 children: up to 2 failed above path, the path child, up to 2 below path
+        int show_start = 0;
+        int show_end = node->child_count - 1;
+
+        if (path_child >= 0) {
+            // Show 2 siblings before path_child (if failed)
+            show_start = path_child;
+            for (int back = 1; back <= 2 && path_child - back >= 0; back++) {
+                if (node->children[path_child - back]->marked_failed) {
+                    show_start = path_child - back;
+                } else {
+                    break;  // Don't show non-failed before the path
+                }
+            }
+
+            // Show 2 siblings after path_child
+            show_end = (path_child + 2 < node->child_count) ? path_child + 2 : node->child_count - 1;
+        } else {
+            // No path child - show first 5
+            show_end = (node->child_count > 5) ? 4 : node->child_count - 1;
+        }
+
+        // Count hidden branches before
+        int hidden_before = show_start;
+        int failed_before = 0;
+        for (int i = 0; i < show_start; i++) {
+            if (node->children[i]->marked_failed) failed_before++;
+        }
+
+        if (hidden_before > 0) {
+            fprintf(file, "   │ %s", new_prefix);
+            fprintf(file, "├─ [%d hidden: %d failed, %d untried]\n",
+                    hidden_before, failed_before, hidden_before - failed_before);
+        }
+
+        // Show visible children
+        for (int i = show_start; i <= show_end; i++) {
+            int child_is_last = (i == show_end) && (show_end == node->child_count - 1);
+            print_tree_recursive(file, node->children[i], current_node,
+                               depth + 1, new_prefix, child_is_last);
+        }
+
+        // Count hidden branches after
+        int hidden_after = node->child_count - 1 - show_end;
+        int failed_after = 0;
+        for (int i = show_end + 1; i < node->child_count; i++) {
+            if (node->children[i]->marked_failed) failed_after++;
+        }
+
+        if (hidden_after > 0) {
+            fprintf(file, "   │ %s", new_prefix);
+            fprintf(file, "└─ [%d hidden: %d failed, %d untried]\n",
+                    hidden_after, failed_after, hidden_after - failed_after);
+        }
+    }
+}
+
+/**
+ * @brief Display current tree structure showing all branches (including failed attempts)
  */
 void debug_log_current_tree_structure(LayoutSolver* solver, TreeNode* current_node) {
     if (!solver->tree_debug_file || !current_node) return;
 
-    fprintf(solver->tree_debug_file, "\n🌲 CURRENT TREE STRUCTURE (path to current node):\n");
+    fprintf(solver->tree_debug_file, "\n🌲 COMPLETE TREE STRUCTURE (all branches):\n");
     fprintf(solver->tree_debug_file, "   ┌─────────────────────────────────────────────┐\n");
 
-    // Build path from root to current node
-    TreeNode* path[20];  // Max depth
-    int path_length = 0;
-    TreeNode* node = current_node;
-
-    // Build path backwards
-    while (node && path_length < 20) {
-        path[path_length++] = node;
-        node = node->parent;
+    // Find root node
+    TreeNode* root = current_node;
+    while (root->parent) {
+        root = root->parent;
     }
 
-    // Display path from root to current (reverse order)
-    for (int i = path_length - 1; i >= 0; i--) {
-        TreeNode* n = path[i];
-
-        // Create indent based on depth
-        fprintf(solver->tree_debug_file, "   │ ");
-        for (int d = 0; d < n->depth; d++) {
-            fprintf(solver->tree_debug_file, "  ");
-        }
-
-        // Show tree symbols
-        if (n->depth == 0) {
-            fprintf(solver->tree_debug_file, "🌱 ROOT: %s at (%d,%d)", n->component->name, n->x, n->y);
-        } else {
-            fprintf(solver->tree_debug_file, "├─ %s at (%d,%d)", n->component->name, n->x, n->y);
-        }
-
-        // Mark current node
-        if (n == current_node) {
-            fprintf(solver->tree_debug_file, " ← CURRENT");
-        }
-
-        fprintf(solver->tree_debug_file, "\n");
-    }
+    // Display entire tree from root
+    char prefix[256] = "";
+    print_tree_recursive(solver->tree_debug_file, root, current_node, 0, prefix, 1);
 
     // Show tree stats
     fprintf(solver->tree_debug_file, "   │\n");
-    fprintf(solver->tree_debug_file, "   │ Tree Stats: Depth %d, Total Nodes %d\n",
+    fprintf(solver->tree_debug_file, "   │ Tree Stats: Current Depth %d, Total Nodes %d\n",
             current_node->depth, solver->tree_solver.nodes_created);
     fprintf(solver->tree_debug_file, "   └─────────────────────────────────────────────┘\n");
 
+    fflush(solver->tree_debug_file);
+}
+/**
+ * @brief Log a backtracking event with tree structure
+ */
+void debug_log_backtrack_event(LayoutSolver* solver, TreeNode* repositioned_node, int old_x, int old_y, int new_x, int new_y) {
+    if (!solver->tree_debug_file) return;
+
+    fprintf(solver->tree_debug_file, "\n");
+    fprintf(solver->tree_debug_file, "═══════════════════════════════════════════════════════════════\n");
+    fprintf(solver->tree_debug_file, "🔄 BACKTRACKING EVENT\n");
+    fprintf(solver->tree_debug_file, "═══════════════════════════════════════════════════════════════\n");
+    fprintf(solver->tree_debug_file, "Repositioned: %s\n", repositioned_node->component->name);
+    fprintf(solver->tree_debug_file, "   Old position: (%d, %d)\n", old_x, old_y);
+    fprintf(solver->tree_debug_file, "   New position: (%d, %d)\n", new_x, new_y);
+    fprintf(solver->tree_debug_file, "   Node depth: %d\n", repositioned_node->depth);
+    fprintf(solver->tree_debug_file, "   Alternative: %d/%d\n",
+            repositioned_node->my_current_alternative_index + 1,
+            repositioned_node->my_alternatives_count);
+    fprintf(solver->tree_debug_file, "\n");
+
+    // Show updated tree structure
+    debug_log_current_tree_structure(solver, solver->tree_solver.current_node);
+
+    fprintf(solver->tree_debug_file, "\n");
     fflush(solver->tree_debug_file);
 }

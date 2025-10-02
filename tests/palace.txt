@@ -1,0 +1,104 @@
+## Components
+
+**MainHall** - Central hall serving as the main gathering space and hub of the palace.
+
+**ThroneRoom** - Royal throne room for ceremonies and audiences.
+
+**Kitchen** - Food preparation area with cooking facilities.
+
+**Bedroom** - Royal sleeping quarters.
+
+**Treasury** - Secure vault for valuables and treasures.
+
+**Barracks** - Guard quarters and training area.
+
+**Garden** - Decorative outdoor garden space.
+
+**Wall** - Protective wall structure.
+
+**GateHouse** - Entrance gatehouse with defensive features.
+
+## Constraints
+
+ADJACENT(MainHall, ThroneRoom, n)
+ADJACENT(MainHall, Kitchen, w)
+ADJACENT(MainHall, Bedroom, e)
+ADJACENT(MainHall, Barracks, s)
+ADJACENT(Bedroom, Treasury, e)
+ADJACENT(Wall, MainHall, a)
+ADJACENT(Wall, Garden, a)
+ADJACENT(Wall, GateHouse, s)
+ADJACENT(Garden, MainHall, w)
+
+## Component Tiles
+
+**MainHall:**
+```
+XXXXXXXXXX
+XT.h..h.TX
+Xr......rX
+Xf.....f.X
+XXXXXXXXXX
+```
+
+**ThroneRoom:**
+```
+XXXXXXXXX
+XM.....MX
+Xr.....rX
+Xf.....fX
+XXXXXXXXX
+```
+
+**Kitchen:**
+```
+XXXXXXXXX
+XTs...%TX
+X.......X
+XXXXXXXXX
+```
+
+**Bedroom:**
+```
+XXXXXXX
+XB....X
+XT.h.CX
+XXXXXXX
+```
+
+**Treasury:**
+```
+XXXXXXXXX
+XC$..$CX
+XC$..$CX
+XXXXXXXXX
+```
+
+**Barracks:**
+```
+XXXXXXXXXX
+XBB...BBX
+XTM...MTX
+XXXXXXXXXX
+```
+
+**Garden:**
+```
+ttttttttt
+t~vvv~vt
+ttttttttt
+```
+
+**Wall:**
+```
+SSSSSSSSSS
+S.......GS
+SSSSSSSSSS
+```
+
+**GateHouse:**
+```
+SSSSSSSSS
+SwMMMMMwS
+SSSSSSSSS
+```
